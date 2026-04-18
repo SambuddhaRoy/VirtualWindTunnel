@@ -1,0 +1,19 @@
+{
+  "name": "virtual-wind-tunnel",
+  "version": "1.0.0",
+  "description": "High-performance virtual wind tunnel using GPU-accelerated D3Q19 LBM",
+  "dependencies": [
+    "vulkan-headers",
+    "vulkan-loader",
+    "glfw3",
+    {
+      "name": "imgui",
+      "features": ["glfw-binding", "vulkan-binding"]
+    },
+    "assimp",
+    "glm",
+    "vk-bootstrap",
+    "vulkan-memory-allocator",
+    "shaderc"
+  ]
+}

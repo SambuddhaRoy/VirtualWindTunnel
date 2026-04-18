@@ -1,0 +1,212 @@
+#version 450
+// ============================================================================
+// D3Q19 Lattice Boltzmann Method — Compute Shader (Pull Scheme)
+// ============================================================================
+// Each thread handles one lattice cell (x, y, z).
+// Algorithm: Pull (Gather) -> Collide (BGK) -> Store
+// This eliminates race conditions entirely: 1 thread = 1 write location.
+// ============================================================================
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+// ─── Push Constants ─────────────────────────────────────────────────────
+layout(push_constant) uniform PushConstants {
+    uint  gridX;        // Grid dimension X
+    uint  gridY;        // Grid dimension Y
+    uint  gridZ;        // Grid dimension Z
+    float tau;          // Relaxation time (viscosity = cs^2 * (tau - 0.5*dt))
+    float inletVelX;    // Inlet velocity X component
+    float inletVelY;    // Inlet velocity Y component
+    float inletVelZ;    // Inlet velocity Z component
+    float time;         // Global time step counter
+    float turbulence;   // Turbulence intensity
+} pc;
+
+// ─── Buffers ────────────────────────────────────────────────────────────
+// Distribution functions: 19 floats per cell, linearized as [q * totalCells + cellIndex]
+layout(std430, set = 0, binding = 0) readonly  buffer FIn     { float f_in[];  };
+layout(std430, set = 0, binding = 1) writeonly buffer FOut    { float f_out[]; };
+// Obstacle map: 1 byte per cell, 0 = fluid, 1 = solid boundary
+layout(std430, set = 0, binding = 2) readonly  buffer Obstacle { uint obstacle[]; };
+// Macroscopic output: density (1 float) + velocity (3 floats) per cell = 4 floats
+layout(std430, set = 0, binding = 3) writeonly buffer MacroOut { float macro_out[]; };
+
+// ─── D3Q19 Constants ────────────────────────────────────────────────────
+// Lattice velocity vectors e_i for D3Q19
+const ivec3 e[19] = ivec3[19](
+    ivec3( 0,  0,  0),   // 0:  rest
+    ivec3( 1,  0,  0),   // 1:  +x
+    ivec3(-1,  0,  0),   // 2:  -x
+    ivec3( 0,  1,  0),   // 3:  +y
+    ivec3( 0, -1,  0),   // 4:  -y
+    ivec3( 0,  0,  1),   // 5:  +z
+    ivec3( 0,  0, -1),   // 6:  -z
+    ivec3( 1,  1,  0),   // 7:  +x+y
+    ivec3(-1,  1,  0),   // 8:  -x+y
+    ivec3( 1, -1,  0),   // 9:  +x-y
+    ivec3(-1, -1,  0),   // 10: -x-y
+    ivec3( 1,  0,  1),   // 11: +x+z
+    ivec3(-1,  0,  1),   // 12: -x+z
+    ivec3( 1,  0, -1),   // 13: +x-z
+    ivec3(-1,  0, -1),   // 14: -x-z
+    ivec3( 0,  1,  1),   // 15: +y+z
+    ivec3( 0, -1,  1),   // 16: -y+z
+    ivec3( 0,  1, -1),   // 17: +y-z
+    ivec3( 0, -1, -1)    // 18: -y-z
+);
+
+// Weights for D3Q19
+const float w[19] = float[19](
+    1.0 / 3.0,                                          // rest
+    1.0 / 18.0, 1.0 / 18.0, 1.0 / 18.0,               // face neighbors
+    1.0 / 18.0, 1.0 / 18.0, 1.0 / 18.0,
+    1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0,               // edge neighbors
+    1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0,
+    1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0,
+    1.0 / 36.0, 1.0 / 36.0, 1.0 / 36.0
+);
+
+// Opposite direction indices for bounce-back
+const int opposite[19] = int[19](
+    0,  2,  1,  4,  3,  6,  5,
+    10, 9,  8,  7,
+    14, 13, 12, 11,
+    18, 17, 16, 15
+);
+
+// ─── Helper Functions ───────────────────────────────────────────────────
+uint cellIndex(uint x, uint y, uint z) {
+    return z * pc.gridX * pc.gridY + y * pc.gridX + x;
+}
+
+uint distIndex(uint q, uint cellIdx) {
+    return q * pc.gridX * pc.gridY * pc.gridZ + cellIdx;
+}
+
+// Read obstacle flag. Obstacle buffer is packed as uint32, 1 flag per uint.
+bool isSolid(uint cellIdx) {
+    return obstacle[cellIdx] != 0u;
+}
+
+// Compute equilibrium distribution for direction q
+float feq(uint q, float rho, vec3 u) {
+    float eu = float(e[q].x) * u.x + float(e[q].y) * u.y + float(e[q].z) * u.z;
+    float usq = dot(u, u);
+    // f_eq = w_i * rho * (1 + 3*e_i.u + 4.5*(e_i.u)^2 - 1.5*u.u)
+    return w[q] * rho * (1.0 + 3.0 * eu + 4.5 * eu * eu - 1.5 * usq);
+}
+
+// ─── Main Kernel ────────────────────────────────────────────────────────
+void main() {
+    uvec3 gid = gl_GlobalInvocationID;
+    uint x = gid.x;
+    uint y = gid.y;
+    uint z = gid.z;
+
+    // Bounds check
+    if (x >= pc.gridX || y >= pc.gridY || z >= pc.gridZ) return;
+
+    uint idx = cellIndex(x, y, z);
+
+    // ── Step 1: Pull (Stream) ───────────────────────────────────────
+    // For each direction q, read from the upstream neighbor.
+    float f[19];
+    for (uint q = 0; q < 19; q++) {
+        // Source cell: where the distribution is coming FROM
+        int sx = int(x) - e[q].x;
+        int sy = int(y) - e[q].y;
+        int sz = int(z) - e[q].z;
+
+        // Boundary handling: periodic or inlet/outlet
+        if (sx < 0) {
+            // Left boundary (inlet): use Zou-He velocity boundary
+            sx = 0;
+        } else if (sx >= int(pc.gridX)) {
+            // Right boundary (outlet): extrapolate (copy from last interior cell)
+            sx = int(pc.gridX) - 1;
+        }
+
+        if (sy < 0)               sy = int(pc.gridY) - 1;  // Periodic top/bottom
+        if (sy >= int(pc.gridY))   sy = 0;
+        if (sz < 0)               sz = int(pc.gridZ) - 1;  // Periodic front/back
+        if (sz >= int(pc.gridZ))   sz = 0;
+
+        uint srcIdx = cellIndex(uint(sx), uint(sy), uint(sz));
+        f[q] = f_in[distIndex(q, srcIdx)];
+    }
+
+    // ── Step 2: Boundary Conditions ─────────────────────────────────
+    // Bounce-back for solid obstacles
+    if (isSolid(idx)) {
+        // Simple bounce-back: swap incoming/outgoing directions
+        for (uint q = 0; q < 19; q++) {
+            f_out[distIndex(q, idx)] = f[opposite[q]];
+        }
+        // Write zero velocity for solid cells
+        macro_out[idx * 4 + 0] = 1.0;  // density
+        macro_out[idx * 4 + 1] = 0.0;  // vx
+        macro_out[idx * 4 + 2] = 0.0;  // vy
+        macro_out[idx * 4 + 3] = 0.0;  // vz
+        return;
+    }
+
+    // ── Step 3: Compute macroscopic quantities ──────────────────────
+    float rho = 0.0;
+    vec3  u   = vec3(0.0);
+    for (uint q = 0; q < 19; q++) {
+        rho += f[q];
+        u.x += float(e[q].x) * f[q];
+        u.y += float(e[q].y) * f[q];
+        u.z += float(e[q].z) * f[q];
+    }
+    u /= rho;
+
+    // ── Step 4: Inlet boundary (Zou-He style) ───────────────────────
+    if (x == 0) {
+        vec3 targetU = vec3(pc.inletVelX, pc.inletVelY, pc.inletVelZ);
+        
+        if (pc.turbulence > 0.0) {
+            float t = pc.time * 0.1;
+            float noiseY = sin(float(y) * 0.5 + t) * cos(float(z) * 0.3 + t * 0.5);
+            float noiseZ = cos(float(y) * 0.4 - t * 0.8) * sin(float(z) * 0.6 - t * 1.2);
+            targetU.y += noiseY * pc.turbulence;
+            targetU.z += noiseZ * pc.turbulence;
+        }
+
+        u   = targetU;
+        rho = 1.0;  // Fixed density at inlet
+        // Recompute distributions to equilibrium at inlet
+        for (uint q = 0; q < 19; q++) {
+            f[q] = feq(q, rho, u);
+        }
+    }
+
+    // ── Step 5: Outlet boundary (extrapolation) ─────────────────────
+    if (x == pc.gridX - 1) {
+        // Copy from one cell upstream to allow free outflow
+        uint upstreamIdx = cellIndex(x - 1, y, z);
+        rho = 0.0;
+        u = vec3(0.0);
+        for (uint q = 0; q < 19; q++) {
+            f[q] = f_in[distIndex(q, upstreamIdx)];
+            rho += f[q];
+            u.x += float(e[q].x) * f[q];
+            u.y += float(e[q].y) * f[q];
+            u.z += float(e[q].z) * f[q];
+        }
+        u /= rho;
+    }
+
+    // ── Step 6: Collision (BGK) ─────────────────────────────────────
+    float omega = 1.0 / pc.tau;  // Relaxation parameter
+    for (uint q = 0; q < 19; q++) {
+        float f_eq = feq(q, rho, u);
+        f_out[distIndex(q, idx)] = f[q] - omega * (f[q] - f_eq);
+    }
+
+    // ── Step 7: Write macroscopic output ────────────────────────────
+    macro_out[idx * 4 + 0] = rho;
+    macro_out[idx * 4 + 1] = u.x;
+    macro_out[idx * 4 + 2] = u.y;
+    macro_out[idx * 4 + 3] = u.z;
+}

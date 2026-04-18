@@ -1,0 +1,17 @@
+# Build directories
+build/
+bin/
+out/
+.vs/
+.vscode/
+
+# Dependency managers
+vcpkg_installed/
+
+# OS specific
+Thumbs.db
+.DS_Store
+
+# Temporary files
+*.swp
+*.log

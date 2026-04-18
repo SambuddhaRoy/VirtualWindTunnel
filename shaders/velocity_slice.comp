@@ -1,0 +1,87 @@
+#version 450
+// ============================================================================
+// Velocity Field Visualization — Compute Shader
+// ============================================================================
+// Reads the macroscopic output from the LBM solver and generates a 2D
+// slice texture (velocity magnitude mapped to a colormap) for rendering.
+// ============================================================================
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant) uniform PushConstants {
+    uint  gridX;
+    uint  gridY;
+    uint  gridZ;
+    uint  sliceAxis;     // 0 = XY slice, 1 = XZ slice, 2 = YZ slice
+    uint  sliceIndex;    // Index along the slice axis
+    float maxVelocity;   // For normalization of the color map
+} pc;
+
+// Macroscopic field: [rho, ux, uy, uz] per cell
+layout(std430, set = 0, binding = 0) readonly buffer MacroIn { float macro_in[]; };
+
+// Output image for display
+layout(rgba8, set = 0, binding = 1) uniform writeonly image2D outputImage;
+
+// ─── Inferno-inspired colormap ──────────────────────────────────────────
+vec3 colormap(float t) {
+    // A perceptually uniform colormap going from black -> purple -> red -> yellow -> white
+    t = clamp(t, 0.0, 1.0);
+    
+    const vec3 c0 = vec3(0.0002, 0.0016, 0.0138);
+    const vec3 c1 = vec3(0.2401, 0.0593, 0.4415);
+    const vec3 c2 = vec3(0.5765, 0.1117, 0.4815);
+    const vec3 c3 = vec3(0.8530, 0.2597, 0.3068);
+    const vec3 c4 = vec3(0.9876, 0.5564, 0.0778);
+    const vec3 c5 = vec3(0.9922, 0.9977, 0.6445);
+
+    if (t < 0.2) return mix(c0, c1, t / 0.2);
+    if (t < 0.4) return mix(c1, c2, (t - 0.2) / 0.2);
+    if (t < 0.6) return mix(c2, c3, (t - 0.4) / 0.2);
+    if (t < 0.8) return mix(c3, c4, (t - 0.6) / 0.2);
+    return mix(c4, c5, (t - 0.8) / 0.2);
+}
+
+void main() {
+    uvec2 gid = gl_GlobalInvocationID.xy;
+    
+    uint cx, cy, cz;
+    uint imgW, imgH;
+
+    // Map 2D thread ID to 3D grid coordinates based on slice axis
+    if (pc.sliceAxis == 0) {
+        // XY slice at z = sliceIndex
+        cx = gid.x; cy = gid.y; cz = pc.sliceIndex;
+        imgW = pc.gridX; imgH = pc.gridY;
+    } else if (pc.sliceAxis == 1) {
+        // XZ slice at y = sliceIndex
+        cx = gid.x; cy = pc.sliceIndex; cz = gid.y;
+        imgW = pc.gridX; imgH = pc.gridZ;
+    } else {
+        // YZ slice at x = sliceIndex (Rotated 90 deg anti-clockwise)
+        cx = pc.sliceIndex; 
+        cy = pc.gridY - 1 - gid.y; 
+        cz = gid.x;
+        imgW = pc.gridZ; 
+        imgH = pc.gridY;
+    }
+
+    if (gid.x >= imgW || gid.y >= imgH) {
+        imageStore(outputImage, ivec2(gid), vec4(0.0, 0.0, 0.0, 1.0));
+        return;
+    }
+
+    uint cellIdx = cz * pc.gridX * pc.gridY + cy * pc.gridX + cx;
+
+    // Read macroscopic velocity
+    float ux = macro_in[cellIdx * 4 + 1];
+    float uy = macro_in[cellIdx * 4 + 2];
+    float uz = macro_in[cellIdx * 4 + 3];
+
+    float speed = sqrt(ux * ux + uy * uy + uz * uz);
+    float normalized = speed / max(pc.maxVelocity, 0.0001);
+
+    vec3 color = colormap(normalized);
+
+    imageStore(outputImage, ivec2(gid), vec4(color, 1.0));
+}
