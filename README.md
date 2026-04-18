@@ -13,6 +13,14 @@ A high-performance, real-time aerodynamics simulation tool built with C++23 and 
 - **Modern UI**: Clean, OLED-optimized interface powered by ImGui for real-time control and monitoring.
 - **Unit-Aware Simulation**: Physics-based controls with support for SI and imperial units.
 
+## Download (Windows)
+
+For Windows users, you can download the pre-built binary and run the application immediately without building from source:
+
+🚀 [**Download VirtualWindTunnel v1.0.0 (Windows)**](https://github.com/SambuddhaRoy/VirtualWindTunnel/releases/latest/download/VirtualWindTunnel_v1.0.0_Windows.zip)
+
+*Extract the ZIP file and run `VirtualWindTunnel.exe`. Ensure you have the Vulkan Runtime installed.*
+
 ## Technology Stack
 
 - **Core**: C++23
