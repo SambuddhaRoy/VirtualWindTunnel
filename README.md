@@ -17,7 +17,7 @@ A high-performance, real-time aerodynamics simulation tool built with C++23 and 
 
 For Windows users, you can download the pre-built binary and run the application immediately without building from source:
 
-🚀 [**Download VirtualWindTunnel v1.0.0 (Windows)**](https://github.com/SambuddhaRoy/VirtualWindTunnel/releases/latest/download/VirtualWindTunnel_v1.0.0_Windows.zip)
+🚀 [**Download VirtualWindTunnel v0.0.1-alpha (Windows)**](https://github.com/SambuddhaRoy/VirtualWindTunnel/releases/latest/download/VirtualWindTunnel_v0.0.1-alpha_Windows.zip)
 
 *Extract the ZIP file and run `VirtualWindTunnel.exe`. Ensure you have the Vulkan Runtime installed.*
 
