@@ -17,10 +17,12 @@ namespace vwt {
 void Renderer::init(VkDevice device, VmaAllocator allocator,
                      VkDescriptorPool imguiPool,
                      uint32_t graphicsQueueFamily,
-                     const SimParams& params)
+                     const SimParams& params,
+                     VkBuffer macroBuffer)
 {
-    device_    = device;
-    allocator_ = allocator;
+    device_      = device;
+    allocator_   = allocator;
+    macroBuffer_ = macroBuffer;
 
     createSliceImage(params);
     createSlicePipeline();
@@ -207,12 +209,11 @@ void Renderer::createImGuiTexture(VkDevice device, VkDescriptorPool pool,
 // Dispatch velocity slice compute shader
 // ════════════════════════════════════════════════════════════════════════
 
-void Renderer::computeVelocitySlice(VkCommandBuffer cmd, VkBuffer macroBuffer,
-                                     const SimParams& params)
+void Renderer::computeVelocitySlice(VkCommandBuffer cmd, const SimParams& params)
 {
-    // Update descriptor set with current macro buffer
+    // Update descriptor set only once or when buffer changes (here it's assumed static for simplicity)
     VkDescriptorBufferInfo bufInfo{};
-    bufInfo.buffer = macroBuffer;
+    bufInfo.buffer = macroBuffer_;
     bufInfo.offset = 0;
     bufInfo.range  = VK_WHOLE_SIZE;
 

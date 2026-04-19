@@ -164,14 +164,15 @@ void main() {
     }
     
     // STABILITY LIMITER: Prevent divide-by-zero or NaNs
-    if (rho < 0.01 || isnan(rho)) rho = 1.0;
+    if (rho < 0.1 || rho > 10.0 || isnan(rho)) rho = 1.0;
     u /= rho;
 
-    // STABILITY LIMITER: Clamp velocity magnitude to prevent divergence
+    // STABILITY LIMITER: Clamp velocity magnitude to physically valid lattice range (< 1.0)
+    // Most LBM models diverge above Mach 0.7 (u ~ 0.4)
     float u_mag = length(u);
-    if (u_mag > 0.9 || isnan(u_mag)) {
-        u = normalize(u) * 0.9;
-        if (isnan(u.x)) u = vec3(0.0);
+    if (u_mag > 0.5 || isnan(u_mag)) {
+        if (u_mag > 0.0001) u = (u / u_mag) * 0.5;
+        else u = vec3(0.0);
     }
 
     // ── Step 4: Inlet boundary (Zou-He style) ───────────────────────
@@ -208,108 +209,66 @@ void main() {
             u.y += float(e[q].y) * fu;
             u.z += float(e[q].z) * fu;
         }
-        if (rho > 0.001) u /= rho;
+        if (rho > 0.01) u /= rho;
         else { rho = 1.0; u = vec3(0.0); }
     }
 
     // ── Step 6: Collision ───────────────────────────────────────────
-    if (pc.lbmMode == 1) { // MRT MODE
-        float m[19];
-        // 1. Transform to Moment Space (D3Q19 basis)
-        // Basis: rho, e, eps, jx, qx, jy, qy, jz, qz, 3pxx, 3pixx, pww, piww, pxy, pyz, pzx, mx, my, mz
-        float f0 = f[0], f1 = f[1], f2 = f[2], f3 = f[3], f4 = f[4], f5 = f[5], f6 = f[6];
-        float f7 = f[7], f8 = f[8], f9 = f[9], f10 = f[10], f11 = f[11], f12 = f[12], f13 = f[13], f14 = f[14];
-        float f15 = f[15], f16 = f[16], f17 = f[17], f18 = f[18];
-
-        m[0] = f0 + f1 + f2 + f3 + f4 + f5 + f6 + f7 + f8 + f9 + f10 + f11 + f12 + f13 + f14 + f15 + f16 + f17 + f18;
-        m[1] = -30.0*f0 - 11.0*(f1+f2+f3+f4+f5+f6) + 8.0*(f7+f8+f9+f10+f11+f12+f13+f14+f15+f16+f17+f18);
-        m[2] = 12.0*f0 - 4.0*(f1+f2+f3+f4+f5+f6) + (f7+f8+f9+f10+f11+f12+f13+f14+f15+f16+f17+f18);
-        m[3] = (f1-f2) + (f7-f8+f9-f10+f11-f12+f13-f14);
-        m[4] = -4.0*(f1-f2) + (f7-f8+f9-f10+f11-f12+f13-f14);
-        m[5] = (f3-f4) + (f7+f8-f9-f10+f15+f16-f17-f18);
-        m[6] = -4.0*(f3-f4) + (f7+f8-f9-f10+f15+f16-f17-f18);
-        m[7] = (f5-f6) + (f11+f12-f13-f14+f15-f16+f17-f18);
-        m[8] = -4.0*(f5-f6) + (f11+f12-f13-f14+f15-f16+f17-f18);
-        m[9] = 2.0*(f1+f2) - (f3+f4+f5+f6) + (f7+f8+f9+f10+f11+f12+f13+f14) - 2.0*(f15+f16+f17+f18);
-        m[10] = -4.0*(f1+f2) + 2.0*(f3+f4+f5+f6) + (f7+f8+f9+f10+f11+f12+f13+f14) - 2.0*(f15+f16+f17+f18);
-        m[11] = (f3+f4-f5-f6) + (f7+f8+f9+f10-f11-f12-f13-f14);
-        m[12] = -2.0*(f3+f4-f5-f6) + (f7+f8+f9+f10-f11-f12-f13-f14);
-        m[13] = f7-f8-f9+f10;
-        m[14] = f15-f16-f17+f18;
-        m[15] = f11-f12-f13+f14;
-        m[16] = f7+f8-f9-f10-f15-f16+f17+f18;
-        m[17] = -f7+f8-f9+f10+f11-f12+f13-f14;
-        m[18] = f11+f12-f13-f14-f15+f16-f17+f18;
-
-        // 2. Compute Equilibrium Moments
-        float ux = u.x, uy = u.y, uz = u.z;
-        float u2 = dot(u, u);
-        float meq[19];
-        meq[0]  = rho;
-        meq[1]  = rho * (-11.0 + 19.0 * u2);
-        meq[2]  = rho * (3.0 - 5.5 * u2);
-        meq[3]  = rho * ux;
-        meq[4]  = -2.0/3.0 * rho * ux;
-        meq[5]  = rho * uy;
-        meq[6]  = -2.0/3.0 * rho * uy;
-        meq[7]  = rho * uz;
-        meq[8]  = -2.0/3.0 * rho * uz;
-        meq[9]  = rho * (2.0*ux*ux - (uy*uy + uz*uz));
-        meq[10] = -0.5 * meq[9];
-        meq[11] = rho * (uy*uy - uz*uz);
-        meq[12] = -0.5 * meq[11];
-        meq[13] = rho * ux * uy;
-        meq[14] = rho * uy * uz;
-        meq[15] = rho * uz * ux;
-        meq[16] = 0.0; meq[17] = 0.0; meq[18] = 0.0;
-
-        // 3. Relax Moments
-        float s_v = 1.0 / pc.tau;
-        float s[19] = float[19](
-            0.0, pc.s_bulk, pc.s_bulk, 0.0, pc.s_ghost, 0.0, pc.s_ghost, 0.0, pc.s_ghost,
-            s_v, pc.s_ghost, s_v, pc.s_ghost, s_v, s_v, s_v, pc.s_ghost, pc.s_ghost, pc.s_ghost
-        );
-
-        for (int i = 0; i < 19; i++) {
-            m[i] -= s[i] * (m[i] - meq[i]);
+    if (pc.lbmMode == 1) { // ADVANCED STABILITY MODE (Recursive Regularized / MRT Hybrid)
+        // 1. Compute non-equilibrium distribution (f_neq = f - f_eq)
+        float f_neq[19];
+        float rho_val = rho;
+        vec3 u_val = u;
+        for (int q = 0; q < 19; q++) {
+            f_neq[q] = f[q] - feq(q, rho_val, u_val);
         }
 
-        // 4. Transform back to Distribution Space (M^-1)
-        // Inverse matrix coefficients are fixed for D3Q19
-        f[0] = 1.0/19.0*m[0] - 5.0/399.0*m[1] + 1.0/21.0*m[2];
-        f[1] = 1.0/19.0*m[0] - 11.0/2394.0*m[1] - 4.0/63.0*m[2] + 1.0/10.0*m[3] - 2.0/15.0*m[4] + 1.0/9.0*m[9] - 2.0/9.0*m[10];
-        f[2] = 1.0/19.0*m[0] - 11.0/2394.0*m[1] - 4.0/63.0*m[2] - 1.0/10.0*m[3] + 2.0/15.0*m[4] + 1.0/9.0*m[9] - 2.0/9.0*m[10];
-        f[3] = 1.0/19.0*m[0] - 11.0/2394.0*m[1] - 4.0/63.0*m[2] + 1.0/10.0*m[5] - 2.0/15.0*m[6] - 1.0/18.0*m[9] + 1.0/9.0*m[10] + 1.0/6.0*m[11] - 1.0/3.0*m[12];
-        f[4] = 1.0/19.0*m[0] - 11.0/2394.0*m[1] - 4.0/63.0*m[2] - 1.0/10.0*m[5] + 2.0/15.0*m[6] - 1.0/18.0*m[9] + 1.0/9.0*m[10] + 1.0/6.0*m[11] - 1.0/3.0*m[12];
-        f[5] = 1.0/19.0*m[0] - 11.0/2394.0*m[1] - 4.0/63.0*m[2] + 1.0/10.0*m[7] - 2.0/15.0*m[8] - 1.0/18.0*m[9] + 1.0/9.0*m[10] - 1.0/6.0*m[11] + 1.0/3.0*m[12];
-        f[6] = 1.0/19.0*m[0] - 11.0/2394.0*m[1] - 4.0/63.0*m[2] - 1.0/10.0*m[7] + 2.0/15.0*m[8] - 1.0/18.0*m[9] + 1.0/9.0*m[10] - 1.0/6.0*m[11] + 1.0/3.0*m[12];
-        f[7] = 1.0/19.0*m[0] + 4.0/1197.0*m[1] + 1.0/126.0*m[2] + 1.0/40.0*m[3] + 1.0/120.0*m[4] + 1.0/40.0*m[5] + 1.0/120.0*m[6] + 1.0/36.0*m[9] + 1.0/36.0*m[10] + 1.0/24.0*m[11] + 1.0/24.0*m[12] + 1.0/4.0*m[13] + 1.0/8.0*m[16] - 1.0/8.0*m[17];
-        f[8] = 1.0/19.0*m[0] + 4.0/1197.0*m[1] + 1.0/126.0*m[2] - 1.0/40.0*m[3] - 1.0/120.0*m[4] + 1.0/40.0*m[5] + 1.0/120.0*m[6] + 1.0/36.0*m[9] + 1.0/36.0*m[10] + 1.0/24.0*m[11] + 1.0/24.0*m[12] - 1.0/4.0*m[13] - 1.0/8.0*m[16] + 1.0/8.0*m[17];
-        f[9] = 1.0/19.0*m[0] + 4.0/1197.0*m[1] + 1.0/126.0*m[2] + 1.0/40.0*m[3] + 1.0/120.0*m[4] - 1.0/40.0*m[5] - 1.0/120.0*m[6] + 1.0/36.0*m[9] + 1.0/36.0*m[10] + 1.0/24.0*m[11] + 1.0/24.0*m[12] - 1.0/4.0*m[13] - 1.0/8.0*m[16] - 1.0/8.0*m[17];
-        f[10] = 1.0/19.0*m[0] + 4.0/1197.0*m[1] + 1.0/126.0*m[2] - 1.0/40.0*m[3] - 1.0/120.0*m[4] - 1.0/40.0*m[5] - 1.0/120.0*m[6] + 1.0/36.0*m[9] + 1.0/36.0*m[10] + 1.0/24.0*m[11] + 1.0/24.0*m[12] + 1.0/4.0*m[13] + 1.0/8.0*m[16] + 1.0/8.0*m[17];
-        f[11] = 1.0/19.0*m[0] + 4.0/1197.0*m[1] + 1.0/126.0*m[2] + 1.0/40.0*m[3] + 1.0/120.0*m[4] + 1.0/40.0*m[7] + 1.0/120.0*m[8] + 1.0/36.0*m[9] + 1.0/36.0*m[10] - 1.0/24.0*m[11] - 1.0/24.0*m[12] + 1.0/4.0*m[15] + 1.0/8.0*m[17] + 1.0/8.0*m[18];
-        f[12] = 1.0/19.0*m[0] + 4.0/1197.0*m[1] + 1.0/126.0*m[2] - 1.0/40.0*m[3] - 1.0/120.0*m[4] + 1.0/40.0*m[7] + 1.0/120.0*m[8] + 1.0/36.0*m[9] + 1.0/36.0*m[10] - 1.0/24.0*m[11] - 1.0/24.0*m[12] - 1.0/4.0*m[15] - 1.0/8.0*m[17] - 1.0/8.0*m[18];
-        f[13] = 1.0/19.0*m[0] + 4.0/1197.0*m[1] + 1.0/126.0*m[2] + 1.0/40.0*m[3] + 1.0/120.0*m[4] - 1.0/40.0*m[7] - 1.0/120.0*m[8] + 1.0/36.0*m[9] + 1.0/36.0*m[10] - 1.0/24.0*m[11] - 1.0/24.0*m[12] - 1.0/4.0*m[15] + 1.0/8.0*m[17] - 1.0/8.0*m[18];
-        f[14] = 1.0/19.0*m[0] + 4.0/1197.0*m[1] + 1.0/126.0*m[2] - 1.0/40.0*m[3] - 1.0/120.0*m[4] - 1.0/40.0*m[7] - 1.0/120.0*m[8] + 1.0/36.0*m[9] + 1.0/36.0*m[10] - 1.0/24.0*m[11] - 1.0/24.0*m[12] + 1.0/4.0*m[15] - 1.0/8.0*m[17] + 1.0/8.0*m[18];
-        f[15] = 1.0/19.0*m[0] + 4.0/1197.0*m[1] + 1.0/126.0*m[2] + 1.0/40.0*m[5] + 1.0/120.0*m[6] + 1.0/40.0*m[7] + 1.0/120.0*m[8] - 1.0/18.0*m[9] + 1.0/18.0*m[10] + 1.0/4.0*m[14] - 1.0/8.0*m[16] - 1.0/8.0*m[18];
-        f[16] = 1.0/19.0*m[0] + 4.0/1197.0*m[1] + 1.0/126.0*m[2] - 1.0/40.0*m[5] - 1.0/120.0*m[6] + 1.0/40.0*m[7] + 1.0/120.0*m[8] - 1.0/18.0*m[9] + 1.0/18.0*m[10] - 1.0/4.0*m[14] - 1.0/8.0*m[16] + 1.0/8.0*m[18];
-        f[17] = 1.0/19.0*m[0] + 4.0/1197.0*m[1] + 1.0/126.0*m[2] + 1.0/40.0*m[5] + 1.0/120.0*m[6] - 1.0/40.0*m[7] - 1.0/120.0*m[8] - 1.0/18.0*m[9] + 1.0/18.0*m[10] - 1.0/4.0*m[14] + 1.0/8.0*m[16] - 1.0/8.0*m[18];
-        f[18] = 1.0/19.0*m[0] + 4.0/1197.0*m[1] + 1.0/126.0*m[2] - 1.0/40.0*m[5] - 1.0/120.0*m[6] - 1.0/40.0*m[7] - 1.0/120.0*m[8] - 1.0/18.0*m[9] + 1.0/18.0*m[10] + 1.0/4.0*m[14] + 1.0/8.0*m[16] + 1.0/8.0*m[18];
+        // 2. Project onto Stress Tensor (Non-equilibrium momentum flux)
+        // This is the core of MRT: we treat the physical stress and ghost noise separately.
+        float Pixx = 0, Piyy = 0, Pizz = 0, Pixy = 0, Piyz = 0, Pizx = 0;
+        for (int q = 0; q < 19; q++) {
+            float fn = f_neq[q];
+            Pixx += fn * float(e[q].x * e[q].x);
+            Piyy += fn * float(e[q].y * e[q].y);
+            Pizz += fn * float(e[q].z * e[q].z);
+            Pixy += fn * float(e[q].x * e[q].y);
+            Piyz += fn * float(e[q].y * e[q].z);
+            Pizx += fn * float(e[q].z * e[q].x);
+        }
 
-        for (int i = 0; i < 19; i++) {
-            // Final safety check for NaNs in distributions
-            if (isnan(f[i])) f[i] = w[i] * rho;
-            f_out[distIndex(uint(i), idx)] = f[i];
+        // 3. Relax Stress and Ghost moments independently
+        float s_v = 1.0 / pc.tau;      // Relaxation for stress (viscosity)
+        float s_g = pc.s_ghost;        // Relaxation for ghost moments (noise damping)
+        float s_b = pc.s_bulk;         // Relaxation for bulk/energy
+
+        // Reconstruct f_out using the Regularized form
+        // This is much more stable than raw MRT matrix multiplication
+        for (uint q = 0; q < 19; q++) {
+            float f_eq = feq(q, rho_val, u_val);
+            
+            // Physical stress contribution (relaxed by s_v)
+            float Qq = (float(e[q].x * e[q].x) - 1.0/3.0) * Pixx + 
+                       (float(e[q].y * e[q].y) - 1.0/3.0) * Piyy + 
+                       (float(e[q].z * e[q].z) - 1.0/3.0) * Pizz +
+                       2.0 * (float(e[q].x * e[q].y) * Pixy + 
+                              float(e[q].y * e[q].z) * Piyz + 
+                              float(e[q].z * e[q].x) * Pizx);
+            
+            float f_reg = w[q] * 1.5 * Qq;
+            
+            // Final distribution: f_eq + (1-s_v)*f_reg + (1-s_g)*f_remainder
+            float f_new = f_eq + (1.0 - s_v) * f_reg + (1.0 - s_g) * (f_neq[q] - f_reg);
+            
+            if (isnan(f_new)) f_new = w[q] * rho_val;
+            f_out[distIndex(q, idx)] = f_new;
         }
 
     } else { // BGK MODE (Legacy)
-        float omega = 1.0 / pc.tau;  // Relaxation parameter
+        float omega = 1.0 / pc.tau;
         for (uint q = 0; q < 19; q++) {
             float f_eq = feq(q, rho, u);
             float f_new = f[q] - omega * (f[q] - f_eq);
-            
-            // Final sanity check for NaNs in distributions
-            if (isnan(f_new)) f_new = w[q];
+            if (isnan(f_new)) f_new = w[q] * rho;
             f_out[distIndex(q, idx)] = f_new;
         }
     }

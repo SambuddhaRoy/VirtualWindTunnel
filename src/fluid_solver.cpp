@@ -50,14 +50,13 @@ void FluidSolver::init(VkDevice device, VmaAllocator allocator,
     gridY_       = params.gridY;
     gridZ_       = params.gridZ;
 
+    createCommandPool();
     createBuffers();
     createDescriptorSets();
     createPipeline();
     resetToEquilibrium();
 
-    std::cout << "[FluidSolver] Initialized. Grid: "
-              << gridX_ << "x" << gridY_ << "x" << gridZ_
-              << " (" << totalCells() << " cells)\n";
+    std::cout << "[FluidSolver] Initialized Grid: " << gridX_ << "x" << gridY_ << "x" << gridZ_ << "\n";
 
     size_t totalMB = (fBufferA_.size + fBufferB_.size + obstacleBuffer_.size
                      + macroBuffer_.size) / (1024 * 1024);
@@ -66,6 +65,19 @@ void FluidSolver::init(VkDevice device, VmaAllocator allocator,
 
 void FluidSolver::destroy() {
     deletionQueue_.flush();
+}
+
+void FluidSolver::createCommandPool() {
+    VkCommandPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO; // WRONG sType detected below, fixing
+    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    poolInfo.queueFamilyIndex = queueFamily_;
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    vkCreateCommandPool(device_, &poolInfo, nullptr, &transferPool_);
+
+    deletionQueue_.push([this]() {
+        vkDestroyCommandPool(device_, transferPool_, nullptr);
+    });
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -256,18 +268,9 @@ void FluidSolver::uploadObstacleMap(const std::vector<uint32_t>& obstacleData) {
     std::memcpy(mapped, obstacleData.data(), dataSize);
     vmaUnmapMemory(allocator_, stagingBuffer_.allocation);
 
-    // Record a one-shot command buffer to copy staging -> obstacle buffer
-    VkCommandPoolCreateInfo poolInfo{};
-    poolInfo.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    poolInfo.queueFamilyIndex = queueFamily_;
-    poolInfo.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-
-    VkCommandPool cmdPool;
-    vkCreateCommandPool(device_, &poolInfo, nullptr, &cmdPool);
-
     VkCommandBufferAllocateInfo cmdAllocInfo{};
     cmdAllocInfo.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    cmdAllocInfo.commandPool        = cmdPool;
+    cmdAllocInfo.commandPool        = transferPool_;
     cmdAllocInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cmdAllocInfo.commandBufferCount = 1;
 
@@ -293,7 +296,7 @@ void FluidSolver::uploadObstacleMap(const std::vector<uint32_t>& obstacleData) {
     vkQueueSubmit(queue_, 1, &submitInfo, VK_NULL_HANDLE);
     vkQueueWaitIdle(queue_);
 
-    vkDestroyCommandPool(device_, cmdPool, nullptr);
+    vkFreeCommandBuffers(device_, transferPool_, 1, &cmd);
 
     std::cout << "[FluidSolver] Obstacle map uploaded to GPU.\n";
 }
@@ -329,17 +332,9 @@ void FluidSolver::resetToEquilibrium() {
     std::memcpy(mapped, initialF.data(), fSize);
     vmaUnmapMemory(allocator_, stagingBuffer_.allocation);
 
-    VkCommandPoolCreateInfo poolInfo{};
-    poolInfo.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    poolInfo.queueFamilyIndex = queueFamily_;
-    poolInfo.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-
-    VkCommandPool cmdPool;
-    vkCreateCommandPool(device_, &poolInfo, nullptr, &cmdPool);
-
     VkCommandBufferAllocateInfo cmdAllocInfo{};
     cmdAllocInfo.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    cmdAllocInfo.commandPool        = cmdPool;
+    cmdAllocInfo.commandPool        = transferPool_;
     cmdAllocInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cmdAllocInfo.commandBufferCount = 1;
 
@@ -371,7 +366,7 @@ void FluidSolver::resetToEquilibrium() {
     vkQueueSubmit(queue_, 1, &submitInfo, VK_NULL_HANDLE);
     vkQueueWaitIdle(queue_);
 
-    vkDestroyCommandPool(device_, cmdPool, nullptr);
+    vkFreeCommandBuffers(device_, transferPool_, 1, &cmd);
 
     pingPong_ = false;
     std::cout << "[FluidSolver] Distributions reset to equilibrium.\n";

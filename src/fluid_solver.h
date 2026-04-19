@@ -32,10 +32,10 @@ public:
     }
 
 private:
+    void createCommandPool();
     void createBuffers();
     void createDescriptorSets();
     void createPipeline();
-    void swapBuffers();
 
     VkDevice       device_     = VK_NULL_HANDLE;
     VmaAllocator   allocator_  = VK_NULL_HANDLE;
@@ -59,6 +59,7 @@ private:
     VkDescriptorSet       descriptorSetB_  = VK_NULL_HANDLE; // B->A
     VkPipelineLayout      pipelineLayout_  = VK_NULL_HANDLE;
     VkPipeline            pipeline_        = VK_NULL_HANDLE;
+    VkCommandPool         transferPool_    = VK_NULL_HANDLE;
 
     DeletionQueue deletionQueue_;
 };

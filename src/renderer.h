@@ -12,13 +12,13 @@ public:
     void init(VkDevice device, VmaAllocator allocator,
               VkDescriptorPool imguiPool,
               uint32_t graphicsQueueFamily,
-              const SimParams& params);
+              const SimParams& params,
+              VkBuffer macroBuffer);
 
     void destroy();
 
     /// Dispatch the velocity slice compute shader
-    void computeVelocitySlice(VkCommandBuffer cmd, VkBuffer macroBuffer,
-                               const SimParams& params);
+    void computeVelocitySlice(VkCommandBuffer cmd, const SimParams& params);
 
     /// Record rendering commands to draw the velocity slice to the screen
     void draw(VkCommandBuffer cmd, VkRenderPass renderPass,
@@ -54,6 +54,7 @@ private:
     VkDescriptorSet       sliceDescriptorSet_ = VK_NULL_HANDLE;
     VkPipelineLayout      sliceComputePipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline            sliceComputePipeline_        = VK_NULL_HANDLE;
+    VkBuffer              macroBuffer_                 = VK_NULL_HANDLE;
 
     // Fullscreen quad graphics pipeline
     VkDescriptorSetLayout graphicsLayout_ = VK_NULL_HANDLE;

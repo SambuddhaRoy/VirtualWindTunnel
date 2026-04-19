@@ -38,6 +38,12 @@ private:
     void drawFrame();
     void drawImGui(VkCommandBuffer cmd);
 
+private:
+    void drawUI_Sidebar();
+    void drawUI_ContextPanel();
+    void drawUI_BottomToolbar();
+    void drawUI_Viewport();
+
     // ── Mesh loading (triggered from UI) ────────────────────────────
     void loadMeshFromFile(const std::string& filepath);
 
@@ -92,7 +98,8 @@ private:
     bool  simulationRunning_ = false;
     bool  meshLoaded_        = false;
     int   stepsPerFrame_     = 4;   // LBM steps per render frame
-    float frameTime_         = 0.0f;
+    float frameTime_  = 0.0f;
+    float avgFrameTime_ = 16.6f;
     uint64_t totalSteps_     = 0;
     char  meshFilePath_[512] = "";
     int   velocityUnit_      = 1;   // 0: m/s, 1: km/h, 2: mph, 3: knots
@@ -111,6 +118,17 @@ private:
     bool isFullscreen_           = false;
     int  windowPosX_             = 100;
     int  windowPosY_             = 100;
+
+    // ── UI State & Navigation ──────────────────────────────────────
+    enum class SidebarTab {
+        Simulation,
+        Mesh,
+        Environment,
+        Aerodynamics,
+        Visualizer,
+        System
+    };
+    SidebarTab activeTab_ = SidebarTab::Simulation;
 
     DeletionQueue mainDeletionQueue_;
 };

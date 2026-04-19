@@ -74,7 +74,7 @@ struct SimParams {
     uint32_t  currentEnvironmentIndex = 0; // Index into EnvironmentRegistry
     
     // MRT Parameters
-    int       lbmMode     = 1;       // 0: BGK, 1: MRT (default to MRT for stability)
+    int       lbmMode     = 0;       // 0: BGK (Default), 1: MRT
     float     s_bulk      = 1.2f;    // Relaxation rate for bulk/energy moments
     float     s_ghost     = 1.5f;    // Relaxation rate for ghost/non-physical moments
 };

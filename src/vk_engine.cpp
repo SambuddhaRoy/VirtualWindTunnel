@@ -5,6 +5,7 @@
 #include "vk_engine.h"
 #include "environment.h"
 #include "sim_scaler.h"
+#include "logger.h"
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -107,6 +108,7 @@ void VulkanEngine::run() {
         drawFrame();
         auto frameEnd = std::chrono::high_resolution_clock::now();
         frameTime_ = std::chrono::duration<float, std::milli>(frameEnd - frameStart).count();
+        avgFrameTime_ = avgFrameTime_ * 0.95f + frameTime_ * 0.05f;
     }
     vkDeviceWaitIdle(device_);
 }
@@ -404,48 +406,48 @@ void VulkanEngine::initImGui() {
     // Load modern font
     io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 18.0f);
 
-    // Modern "Clean Dark" Theme
+    // ── OLED Black & Purple Design System ──
     ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding    = 8.0f;
-    style.FrameRounding     = 6.0f;
-    style.PopupRounding     = 6.0f;
-    style.GrabRounding      = 6.0f;
-    style.TabRounding       = 6.0f;
+    style.WindowRounding = 10.0f;
+    style.ChildRounding = 8.0f;
+    style.FrameRounding = 6.0f;
+    style.PopupRounding = 8.0f;
     style.ScrollbarRounding = 12.0f;
-    style.ScrollbarSize     = 6.0f;
-    style.WindowBorderSize  = 0.0f;
-    style.FrameBorderSize   = 1.0f;
-    style.WindowPadding     = ImVec2(15, 15);
-    style.FramePadding      = ImVec2(10, 8);
-    style.ItemSpacing       = ImVec2(12, 10);
-    style.GrabMinSize       = 15.0f;
+    style.GrabRounding = 6.0f;
+    style.WindowBorderSize = 1.0f;
+    style.FrameBorderSize = 0.0f;
+    style.ItemSpacing = ImVec2(12, 12);
+    style.WindowPadding = ImVec2(20, 20);
+    style.FramePadding = ImVec2(10, 8);
 
-    auto& colors = style.Colors;
-    colors[ImGuiCol_ScrollbarBg]      = ImVec4(0.00f, 0.00f, 0.00f, 0.00f); // Transparent
-    colors[ImGuiCol_ScrollbarGrab]    = ImVec4(0.30f, 0.30f, 0.30f, 0.30f); // Subtle grey
-    colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.40f, 0.40f, 0.40f, 0.80f);
-    colors[ImGuiCol_ScrollbarGrabActive]  = ImVec4(0.00f, 0.45f, 0.85f, 1.00f); // Accent on active
-    
-    colors[ImGuiCol_WindowBg]         = ImVec4(0.00f, 0.00f, 0.00f, 1.00f);
-    colors[ImGuiCol_Header]           = ImVec4(0.05f, 0.05f, 0.05f, 1.00f);
-    colors[ImGuiCol_HeaderHovered]    = ImVec4(0.10f, 0.10f, 0.10f, 1.00f);
-    colors[ImGuiCol_HeaderActive]     = ImVec4(0.15f, 0.15f, 0.15f, 1.00f);
-    colors[ImGuiCol_Button]           = ImVec4(0.08f, 0.08f, 0.08f, 1.00f);
-    colors[ImGuiCol_ButtonHovered]    = ImVec4(0.15f, 0.15f, 0.15f, 1.00f);
-    colors[ImGuiCol_ButtonActive]     = ImVec4(0.00f, 0.45f, 0.85f, 1.00f); // Accent Blue
-    colors[ImGuiCol_FrameBg]          = ImVec4(0.05f, 0.05f, 0.05f, 1.00f);
-    colors[ImGuiCol_FrameBgHovered]   = ImVec4(0.08f, 0.08f, 0.08f, 1.00f);
-    colors[ImGuiCol_FrameBgActive]    = ImVec4(0.12f, 0.12f, 0.12f, 1.00f);
-    colors[ImGuiCol_SliderGrab]       = ImVec4(0.00f, 0.45f, 0.85f, 1.00f);
-    colors[ImGuiCol_SliderGrabActive] = ImVec4(0.00f, 0.55f, 1.00f, 1.00f);
-    colors[ImGuiCol_CheckMark]        = ImVec4(0.00f, 0.45f, 0.85f, 1.00f);
-    colors[ImGuiCol_TitleBg]          = ImVec4(0.00f, 0.00f, 0.00f, 1.00f);
-    colors[ImGuiCol_TitleBgActive]    = ImVec4(0.00f, 0.00f, 0.00f, 1.00f);
-    colors[ImGuiCol_Separator]        = ImVec4(0.10f, 0.10f, 0.10f, 1.00f);
-    colors[ImGuiCol_ChildBg]          = ImVec4(0.00f, 0.00f, 0.00f, 1.00f);
+    ImVec4* colors = style.Colors;
+    colors[ImGuiCol_Text]                   = ImVec4(0.95f, 0.95f, 0.95f, 1.00f);
+    colors[ImGuiCol_TextDisabled]           = ImVec4(0.40f, 0.40f, 0.40f, 1.00f);
+    colors[ImGuiCol_WindowBg]               = ImVec4(0.00f, 0.00f, 0.00f, 1.00f); // Pure OLED Black
+    colors[ImGuiCol_ChildBg]                = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+    colors[ImGuiCol_PopupBg]                = ImVec4(0.02f, 0.02f, 0.02f, 1.00f);
+    colors[ImGuiCol_Border]                 = ImVec4(0.15f, 0.15f, 0.20f, 1.00f);
+    colors[ImGuiCol_FrameBg]                = ImVec4(0.05f, 0.05f, 0.08f, 1.00f);
+    colors[ImGuiCol_FrameBgHovered]         = ImVec4(0.12f, 0.08f, 0.20f, 1.00f);
+    colors[ImGuiCol_FrameBgActive]          = ImVec4(0.20f, 0.10f, 0.35f, 1.00f);
+    colors[ImGuiCol_TitleBg]                = ImVec4(0.00f, 0.00f, 0.00f, 1.00f);
+    colors[ImGuiCol_TitleBgActive]          = ImVec4(0.02f, 0.02f, 0.05f, 1.00f);
+    colors[ImGuiCol_CheckMark]              = ImVec4(0.70f, 0.00f, 1.00f, 1.00f); // Neon Purple
+    colors[ImGuiCol_SliderGrab]             = ImVec4(0.60f, 0.00f, 0.90f, 1.00f);
+    colors[ImGuiCol_SliderGrabActive]       = ImVec4(0.80f, 0.20f, 1.00f, 1.00f);
+    colors[ImGuiCol_Button]                 = ImVec4(0.08f, 0.08f, 0.12f, 1.00f);
+    colors[ImGuiCol_ButtonHovered]          = ImVec4(0.50f, 0.00f, 0.80f, 1.00f);
+    colors[ImGuiCol_ButtonActive]           = ImVec4(0.70f, 0.00f, 1.00f, 1.00f);
+    colors[ImGuiCol_Header]                 = ImVec4(0.10f, 0.05f, 0.15f, 1.00f);
+    colors[ImGuiCol_HeaderHovered]          = ImVec4(0.50f, 0.00f, 0.80f, 0.50f);
+    colors[ImGuiCol_HeaderActive]           = ImVec4(0.70f, 0.00f, 1.00f, 0.80f);
+    colors[ImGuiCol_Separator]              = ImVec4(0.15f, 0.15f, 0.20f, 1.00f);
+    colors[ImGuiCol_Tab]                    = ImVec4(0.05f, 0.05f, 0.10f, 1.00f);
+    colors[ImGuiCol_TabHovered]             = ImVec4(0.70f, 0.00f, 1.00f, 0.80f);
+    colors[ImGuiCol_TabActive]              = ImVec4(0.60f, 0.00f, 0.90f, 1.00f);
+    colors[ImGuiCol_PlotLines]              = ImVec4(0.70f, 0.00f, 1.00f, 1.00f);
 
     ImGui_ImplGlfw_InitForVulkan(window_, true);
-
     ImGui_ImplVulkan_InitInfo initInfo{};
     initInfo.ApiVersion     = VK_API_VERSION_1_3;
     initInfo.Instance       = instance_;
@@ -459,7 +461,6 @@ void VulkanEngine::initImGui() {
     initInfo.PipelineInfoMain.RenderPass = renderPass_;
 
     ImGui_ImplVulkan_Init(&initInfo);
-    // Font texture upload is handled automatically by ImGui 1.92+
 
     mainDeletionQueue_.push([this]() {
         vkDestroyDescriptorPool(device_, imguiPool_, nullptr);
@@ -474,7 +475,7 @@ void VulkanEngine::initSimulation() {
     fluidSolver_.init(device_, allocator_, graphicsQueue_,
                       graphicsQueueFamily_, simParams_);
     renderer_.init(device_, allocator_, imguiPool_,
-                   graphicsQueueFamily_, simParams_);
+                   graphicsQueueFamily_, simParams_, fluidSolver_.getMacroBuffer());
     renderer_.createImGuiTexture(device_, imguiPool_, VK_NULL_HANDLE);
 }
 
@@ -532,8 +533,7 @@ void VulkanEngine::drawFrame() {
     }
 
     // ── Compute: Velocity slice visualization ───────────────────────
-    renderer_.computeVelocitySlice(commandBuffer_,
-        fluidSolver_.getMacroBuffer(), simParams_);
+    renderer_.computeVelocitySlice(commandBuffer_, simParams_);
 
     // ── Graphics: Render pass (ImGui) ───────────────────────────────
     VkClearValue clearValue{};
@@ -589,258 +589,31 @@ void VulkanEngine::drawImGui(VkCommandBuffer cmd) {
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    // ── Sidebar: Control Panel ───────────────────────────────────────
-    ImGui::SetNextWindowPos(ImVec2(0, 0));
-    ImGui::SetNextWindowSize(ImVec2(350, (float)windowExtent_.height));
-    ImGui::Begin("Sidebar", nullptr, 
-                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | 
-                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
+    drawUI_Viewport();
+    drawUI_Sidebar();
+    drawUI_ContextPanel();
+    drawUI_BottomToolbar();
 
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.00f, 0.55f, 1.00f, 1.00f));
-    ImGui::Text("VIRTUAL WIND TUNNEL");
-    ImGui::PopStyleColor();
-    ImGui::TextDisabled("v1.2 | GPU-Accelerated LBM");
-    ImGui::Dummy(ImVec2(0, 10));
+    ImGui::Render();
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
+}
 
-    // Scrollable Settings Area
-    ImGui::BeginChild("SettingsRegion", ImVec2(0, -80), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_AlwaysVerticalScrollbar);
-
-    // --- MESH ---
-    if (ImGui::CollapsingHeader("3D MESH", ImGuiTreeNodeFlags_DefaultOpen)) {
-        if (ImGui::Button("Browse for 3D Model...", ImVec2(-1, 35))) {
-#ifdef _WIN32
-            std::string path = openFileDialog();
-            if (!path.empty()) {
-                snprintf(meshFilePath_, sizeof(meshFilePath_), "%s", path.c_str());
-                loadMeshFromFile(meshFilePath_);
-            }
-#endif
-        }
-        
-        if (meshLoaded_) {
-            ImGui::TextWrapped("Loaded: %s", meshFilePath_);
-        } else {
-            ImGui::TextDisabled("No mesh loaded. Use browse or drag & drop.");
-        }
-
-        ImGui::Dummy(ImVec2(0, 5));
-        if (ImGui::Button("Clear Environment", ImVec2(-1, 30))) {
-            std::vector<uint32_t> empty(static_cast<size_t>(simParams_.gridX) * simParams_.gridY * simParams_.gridZ, 0);
-            fluidSolver_.uploadObstacleMap(empty);
-            fluidSolver_.resetToEquilibrium();
-            meshLoaded_ = false;
-            totalSteps_ = 0;
-        }
-    }
-
-    // --- SIMULATION ---
-    if (ImGui::CollapsingHeader("SIMULATION", ImGuiTreeNodeFlags_DefaultOpen)) {
-        if (ImGui::Button(simulationRunning_ ? "Pause" : "Start", ImVec2(150, 40))) {
-            simulationRunning_ = !simulationRunning_;
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Reset", ImVec2(-1, 40))) {
-            fluidSolver_.resetToEquilibrium();
-            totalSteps_ = 0;
-        }
-        
-        ImGui::SliderInt("Steps/Frame", &stepsPerFrame_, 1, 64);
-    }
-
-    // --- ENVIRONMENT ---
-    if (ImGui::CollapsingHeader("PLANETARY ENVIRONMENT", ImGuiTreeNodeFlags_DefaultOpen)) {
-        auto& profiles = EnvironmentRegistry::getProfiles();
-        std::vector<const char*> profileNames;
-        for (const auto& p : profiles) profileNames.push_back(p.name.c_str());
-
-        int selected = static_cast<int>(simParams_.currentEnvironmentIndex);
-        if (ImGui::Combo("Preset", &selected, profileNames.data(), static_cast<int>(profileNames.size()))) {
-            simParams_.currentEnvironmentIndex = static_cast<uint32_t>(selected);
-            const auto& p = profiles[selected];
-            
-            // Suggest a stable dt for this environment
-            float latticeDx = 0.01f; // Assume 1cm per cell for reference
-            float latticeDt = SimulationScaler::suggestLatticeDt(p.getKinematicViscosity(), latticeDx, 0.6f);
-            
-            // Update tau and normalization
-            simParams_.tau = SimulationScaler::calculateTau(p.getKinematicViscosity(), latticeDx, latticeDt);
-            simParams_.maxVelocity = SimulationScaler::toLatticeVelocity(30.0f, p.speedOfSound); // Normalize to 30m/s
-        }
-        
-        const auto& p = profiles[simParams_.currentEnvironmentIndex];
-        ImGui::TextWrapped("%s", p.description.c_str());
-        ImGui::TextDisabled("Density: %.3f kg/m3", p.density);
-        ImGui::TextDisabled("Viscosity: %.2e Pa.s", p.dynamicViscosity);
-        ImGui::TextDisabled("Sound Speed: %.1f m/s", p.speedOfSound);
-    }
-
-    // --- ENGINE ---
-    if (ImGui::CollapsingHeader("SIMULATION ENGINE", ImGuiTreeNodeFlags_DefaultOpen)) {
-        const char* engineNames[] = { "BGK (Legacy)", "MRT (Advanced Stability)" };
-        ImGui::Combo("Collision Model", &simParams_.lbmMode, engineNames, 2);
-        
-        if (simParams_.lbmMode == 1) { // MRT
-            ImGui::Dummy(ImVec2(0, 5));
-            ImGui::Text("Stability Tuning (MRT Only)");
-            
-            ImGui::SliderFloat("Bulk Relax", &simParams_.s_bulk, 0.1f, 1.9f, "%.2f");
-            if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) simParams_.s_bulk = 1.2f;
-            
-            ImGui::SliderFloat("Ghost Damping", &simParams_.s_ghost, 0.1f, 1.9f, "%.2f");
-            if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) simParams_.s_ghost = 1.5f;
-            
-            ImGui::TextDisabled("Lower values = accuracy, higher = stability.");
-        }
-    }
-
-    // --- PHYSICS ---
-    if (ImGui::CollapsingHeader("AERODYNAMICS", ImGuiTreeNodeFlags_DefaultOpen)) {
-        const char* unitNames[] = { "m/s", "km/h", "mph", "knots" };
-        // Scaling factors based on Mach 1 (0.577 lattice units) = 343 m/s
-        float unitScales[] = { 594.45f, 2140.0f, 1329.0f, 1155.0f }; 
-        
-        ImGui::Combo("Velocity Units", &velocityUnit_, unitNames, 4);
-        float scale = unitScales[velocityUnit_];
-        const char* uName = unitNames[velocityUnit_];
-
-        const char* modeNames[] = { "Regular (0-400 km/h)", "Supersonic (± Mach 2)" };
-        if (ImGui::Combo("Speed Mode", &speedMode_, modeNames, 2)) {
-            // Snap velocity to new range if out of bounds
-            float minV = (speedMode_ == 0) ? 0.0f : -1.20f;
-            float maxV = (speedMode_ == 0) ? (400.0f / 2140.0f) : 1.20f;
-            simParams_.inletVelX = std::clamp(simParams_.inletVelX, minV, maxV);
-            simParams_.inletVelY = std::clamp(simParams_.inletVelY, minV, maxV);
-            simParams_.inletVelZ = std::clamp(simParams_.inletVelZ, minV, maxV);
-        }
-
-        // Helper for unit-converted sliders with fine control and reset
-        auto unitSlider = [&](const char* label, float* latticeVal, float minL, float maxL) {
-            float displayVal = (*latticeVal) * scale;
-            if (ImGui::SliderFloat(label, &displayVal, minL * scale, maxL * scale, (std::string("%.2f ") + uName).c_str())) {
-                *latticeVal = displayVal / scale;
-            }
-
-            // Right-click to reset to zero
-            if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
-                *latticeVal = 0.0f;
-            }
-
-            if (ImGui::IsItemHovered()) {
-                float wheel = ImGui::GetIO().MouseWheel;
-                if (wheel != 0.0f) {
-                    float step = (maxL - minL) * 0.005f;
-                    if (ImGui::GetIO().KeyShift) step *= 0.1f;
-                    *latticeVal = std::clamp(*latticeVal + (wheel * step), minL, maxL);
-                }
-            }
-        };
-
-        float minX = (speedMode_ == 0) ? 0.0f : -1.20f;
-        float maxX = (speedMode_ == 0) ? (400.0f / 2140.0f) : 1.20f;
-        
-        float minYZ = (speedMode_ == 0) ? -0.20f : -1.20f;
-        float maxYZ = (speedMode_ == 0) ? 0.20f : 1.20f;
-
-        unitSlider("Air Speed (X)", &simParams_.inletVelX, minX, maxX);
-        unitSlider("Air Speed (Y)", &simParams_.inletVelY, minYZ, maxYZ);
-        unitSlider("Air Speed (Z)", &simParams_.inletVelZ, minYZ, maxYZ);
-
-        ImGui::Dummy(ImVec2(0, 5));
-        ImGui::SliderFloat("Turbulence", &simParams_.turbulence, 0.0f, 0.2f, "%.4f");
-        if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) simParams_.turbulence = 0.0f;
-        
-        ImGui::SliderFloat("Viscosity (tau)", &simParams_.tau, 0.5001f, 2.0f, "%.4f");
-        if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) simParams_.tau = 0.6f; // Default tau
-        
-        if (ImGui::IsItemHovered()) {
-             float wheel = ImGui::GetIO().MouseWheel;
-             if (wheel != 0.0f) {
-                 float step = 0.001f;
-                 if (ImGui::GetIO().KeyShift) step *= 0.1f;
-                 simParams_.tau = std::clamp(simParams_.tau + (wheel * step), 0.5001f, 2.0f);
-             }
-        }
-        
-        float viscosity = (simParams_.tau - 0.5f) / 3.0f;
-        float speedMag = sqrt(simParams_.inletVelX*simParams_.inletVelX + simParams_.inletVelY*simParams_.inletVelY + simParams_.inletVelZ*simParams_.inletVelZ);
-        float Re = speedMag * static_cast<float>(simParams_.gridY) / (viscosity + 1e-6f);
-        float Mach = speedMag / 0.577f;
-        ImGui::TextDisabled("Reynolds Number: %.0f", Re);
-        ImGui::TextDisabled("Mach Number: %.3f", Mach);
-        if (Mach > 1.0f) ImGui::TextColored(ImVec4(1, 0, 0, 1), "SUPERSONIC FLOW DETECTED");
-    }
-
-    // --- VISUALIZATION ---
-    if (ImGui::CollapsingHeader("VISUALIZER")) {
-        const char* axisNames[] = { "Top-Down (XY)", "Side-View (XZ)", "Front-View (YZ)" };
-        int axis = static_cast<int>(simParams_.sliceAxis);
-        if (ImGui::Combo("View Plane", &axis, axisNames, 3)) {
-            simParams_.sliceAxis = static_cast<uint32_t>(axis);
-        }
-
-        uint32_t maxSlice = (axis == 0) ? simParams_.gridZ : (axis == 1) ? simParams_.gridY : simParams_.gridX;
-        int sliceIdx = static_cast<int>(simParams_.sliceIndex);
-        ImGui::SliderInt("Slice Depth", &sliceIdx, 0, maxSlice - 1);
-        simParams_.sliceIndex = static_cast<uint32_t>(sliceIdx);
-
-        ImGui::SliderFloat("Exposure", &simParams_.maxVelocity, 0.01f, 1.0f, "%.2f");
-    }
-
-    // --- SYSTEM ---
-    if (ImGui::CollapsingHeader("SYSTEM & QUALITY")) {
-        if (ImGui::Button(isFullscreen_ ? "Exit Fullscreen" : "Go Fullscreen", ImVec2(-1, 35))) {
-            if (!isFullscreen_) {
-                glfwMaximizeWindow(window_);
-                isFullscreen_ = true;
-            } else {
-                glfwRestoreWindow(window_);
-                isFullscreen_ = false;
-            }
-        }
-        ImGui::Dummy(ImVec2(0, 5));
-        ImGui::Text("Grid Resolution: %u x %u x %u", simParams_.gridX, simParams_.gridY, simParams_.gridZ);
-        ImGui::SliderFloat("Quality Scale", &gridQuality_, 0.5f, 3.0f, "%.1fx");
-        if (ImGui::Button("Apply & Re-Voxelize", ImVec2(-1, 35))) {
-            applyResolutionPending_ = true;
-        }
-    }
-    ImGui::EndChild();
-
-    // Footer Info (Pinned to bottom)
-    ImGui::Separator();
-    ImGui::Dummy(ImVec2(0, 5));
-    ImGui::Text("Status: %s", simulationRunning_ ? "Running" : "Paused");
-    ImGui::Text("Performance: %.1f FPS", 1000.0f / frameTime_);
-
-    ImGui::End();
-
-    // ── Main Viewport: Velocity Field ────────────────────────────────
-    ImGui::SetNextWindowPos(ImVec2(350, 0));
-    ImGui::SetNextWindowSize(ImVec2((float)windowExtent_.width - 350, (float)windowExtent_.height));
+void VulkanEngine::drawUI_Viewport() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImVec2((float)windowExtent_.width, (float)windowExtent_.height));
     ImGui::Begin("Viewport", nullptr, 
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | 
-                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | 
+                 ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar);
 
-    VkDescriptorSet texId = renderer_.getImGuiTextureId();
-    if (texId != VK_NULL_HANDLE) {
-        int ax = static_cast<int>(simParams_.sliceAxis);
-        uint32_t imgW = (ax == 0) ? simParams_.gridX : ((ax == 1) ? simParams_.gridX : simParams_.gridZ);
-        uint32_t imgH = (ax == 0) ? simParams_.gridY : ((ax == 1) ? simParams_.gridZ : simParams_.gridY);
+    auto texId = renderer_.getImGuiTextureId();
+    if (texId) {
+        const uint32_t imgW = renderer_.getSliceWidth();
+        const uint32_t imgH = renderer_.getSliceHeight();
 
         float uvX = static_cast<float>(imgW) / static_cast<float>(renderer_.getSliceWidth());
         float uvY = static_cast<float>(imgH) / static_cast<float>(renderer_.getSliceHeight());
-
-        // View Controls Overlay
-        ImGui::SetCursorPos(ImVec2(20, 20));
-        ImGui::BeginChild("ViewControls", ImVec2(300, 60), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoBackground);
-        ImGui::SetNextItemWidth(120);
-        ImGui::SliderFloat("Zoom", &zoomLevel_, 0.1f, 10.0f, "%.1fx");
-        ImGui::SameLine();
-        if (ImGui::Button("Reset View")) {
-            zoomLevel_ = 1.0f; panX_ = 0.0f; panY_ = 0.0f;
-        }
-        ImGui::EndChild();
 
         ImVec2 avail = ImGui::GetContentRegionAvail();
         float aspect = static_cast<float>(imgW) / static_cast<float>(imgH);
@@ -853,12 +626,10 @@ void VulkanEngine::drawImGui(VkCommandBuffer cmd) {
             dispSize.x = avail.y * aspect;
         }
 
-        // Center the image in the remaining space
         ImVec2 currentPos = ImGui::GetCursorPos();
         ImVec2 offset = ImVec2((avail.x - dispSize.x) * 0.5f, (avail.y - dispSize.y) * 0.5f);
         ImGui::SetCursorPos(ImVec2(currentPos.x + offset.x, currentPos.y + offset.y));
 
-        // UV calculation
         float uWidth = uvX / zoomLevel_;
         float vHeight = uvY / zoomLevel_;
         float maxPanX = (uvX - uWidth) / 2.0f;
@@ -866,13 +637,12 @@ void VulkanEngine::drawImGui(VkCommandBuffer cmd) {
         if (maxPanX < 0) maxPanX = 0;
         if (maxPanY < 0) maxPanY = 0;
         panX_ = std::clamp(panX_, -maxPanX, maxPanX);
-        panY_ = std::clamp(panY_, -maxPanY, panY_);
+        panY_ = std::clamp(panY_, -maxPanY, maxPanY);
 
         float uCenter = (uvX / 2.0f) - panX_;
         float vCenter = (uvY / 2.0f) - panY_;
         ImVec2 uv0 = ImVec2(uCenter - uWidth / 2.0f, vCenter - vHeight / 2.0f);
         ImVec2 uv1 = ImVec2(uCenter + uWidth / 2.0f, vCenter + vHeight / 2.0f);
-
         ImGui::Image(reinterpret_cast<ImTextureID>(texId), dispSize, uv0, uv1);
 
         if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
@@ -881,9 +651,175 @@ void VulkanEngine::drawImGui(VkCommandBuffer cmd) {
             panY_ += (delta.y / dispSize.y) * vHeight;
         }
     }
-
     ImGui::End();
     ImGui::PopStyleVar();
+}
+
+void VulkanEngine::drawUI_Sidebar() {
+    const float railWidth = 60.0f;
+    ImGui::SetNextWindowPos(ImVec2(20, 20));
+    ImGui::SetNextWindowSize(ImVec2(railWidth, (float)windowExtent_.height - 40));
+    ImGui::Begin("NavRail", nullptr, 
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | 
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar);
+
+    auto navButton = [&](const char* icon, SidebarTab tab, const char* tooltip) {
+        bool active = (activeTab_ == tab);
+        if (active) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.4f, 1.0f, 1.0f));
+        
+        ImGui::SetCursorPosX((railWidth - 40.0f) * 0.5f);
+        if (ImGui::Button(icon, ImVec2(40, 40))) {
+            activeTab_ = tab;
+        }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tooltip);
+        
+        if (active) ImGui::PopStyleColor();
+        ImGui::Spacing();
+    };
+
+    ImGui::Dummy(ImVec2(0, 10));
+    navButton("S", SidebarTab::Simulation, "Simulation Settings");
+    navButton("M", SidebarTab::Mesh, "Geometry & Mesh");
+    navButton("E", SidebarTab::Environment, "Environment Presets");
+    navButton("A", SidebarTab::Aerodynamics, "Fluid Dynamics");
+    navButton("V", SidebarTab::Visualizer, "Visualizer Tools");
+    navButton("P", SidebarTab::System, "System Info");
+
+    ImGui::End();
+}
+
+void VulkanEngine::drawUI_ContextPanel() {
+    const float railWidth = 60.0f;
+    const float panelWidth = 300.0f;
+    ImGui::SetNextWindowPos(ImVec2(20 + railWidth + 10, 20));
+    ImGui::SetNextWindowSize(ImVec2(panelWidth, (float)windowExtent_.height - 120));
+    ImGui::Begin("ContentPanel", nullptr, 
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | 
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
+
+    const char* tabNames[] = { "SIMULATION", "3D GEOMETRY", "ENVIRONMENT", "AERODYNAMICS", "VISUALIZER", "SYSTEM" };
+    ImGui::TextColored(ImVec4(0.6f, 0.4f, 1.0f, 1.0f), "%s", tabNames[static_cast<int>(activeTab_)]);
+    ImGui::Separator();
+    ImGui::Dummy(ImVec2(0, 5));
+
+    ImGui::BeginChild("SettingsChild", ImVec2(0, 0), false, ImGuiWindowFlags_NoScrollbar);
+    switch (activeTab_) {
+        case SidebarTab::Simulation:
+        {
+            ImGui::SeparatorText("LBM SOLVER");
+            const char* engineNames[] = { "BGK (Basic)", "MRT-RLBM (Stable)" };
+            ImGui::Combo("Engine", &simParams_.lbmMode, engineNames, 2);
+            ImGui::SliderInt("Steps/Frame", &stepsPerFrame_, 1, 64);
+            
+            ImGui::Dummy(ImVec2(0, 10));
+            ImGui::SeparatorText("DIAGNOSTICS");
+            static bool debugMode = false;
+            ImGui::Checkbox("Verbose Log", &debugMode);
+            if (ImGui::Button("Reset Velocity Field", ImVec2(-1, 35))) fluidSolver_.resetToEquilibrium();
+            break;
+        }
+        case SidebarTab::Mesh:
+        {
+            if (ImGui::Button("Browse Model...", ImVec2(-1, 40))) {
+#ifdef _WIN32
+                std::string path = openFileDialog();
+                if (!path.empty()) { snprintf(meshFilePath_, sizeof(meshFilePath_), "%s", path.c_str()); loadMeshFromFile(meshFilePath_); }
+#endif
+            }
+            if (meshLoaded_) {
+                ImGui::TextWrapped("Loaded: %s", meshFilePath_);
+                if (ImGui::Button("Clear All", ImVec2(-1, 35))) {
+                    std::vector<uint32_t> empty(static_cast<size_t>(simParams_.gridX) * simParams_.gridY * simParams_.gridZ, 0);
+                    fluidSolver_.uploadObstacleMap(empty); fluidSolver_.resetToEquilibrium(); meshLoaded_ = false;
+                }
+            }
+            break;
+        }
+        case SidebarTab::Environment:
+        {
+            auto& profiles = EnvironmentRegistry::getProfiles();
+            std::vector<const char*> profileNames;
+            for (const auto& p : profiles) profileNames.push_back(p.name.c_str());
+            int selected = static_cast<int>(simParams_.currentEnvironmentIndex);
+            if (ImGui::Combo("Planet", &selected, profileNames.data(), (int)profileNames.size())) {
+                simParams_.currentEnvironmentIndex = static_cast<uint32_t>(selected);
+                const auto& p = profiles[selected];
+                float latticeDt = SimulationScaler::suggestLatticeDt(p.getKinematicViscosity(), 0.01f, 0.6f);
+                simParams_.tau = SimulationScaler::calculateTau(p.getKinematicViscosity(), 0.01f, latticeDt);
+            }
+            const auto& p = profiles[simParams_.currentEnvironmentIndex];
+            ImGui::TextWrapped("%s", p.description.c_str());
+            break;
+        }
+        case SidebarTab::Aerodynamics:
+        {
+            const char* unitNames[] = { "m/s", "km/h", "mph", "knots" };
+            float unitScales[] = { 594.45f, 2140.0f, 1329.0f, 1155.0f }; 
+            ImGui::Combo("Units", &velocityUnit_, unitNames, 4);
+            float scale = unitScales[velocityUnit_];
+            const char* uName = unitNames[velocityUnit_];
+            const char* modes[] = { "Subsonic", "Supersonic" };
+            ImGui::Combo("Speed Mode", &speedMode_, modes, 2);
+            
+            auto slider = [&](const char* label, float* val, float minL, float maxL) {
+                float d = (*val) * scale;
+                if (ImGui::SliderFloat(label, &d, minL * scale, maxL * scale, (std::string("%.1f ") + uName).c_str())) *val = d / scale;
+            };
+            float mX = (speedMode_ == 0) ? 0.0f : -1.2f, MX = (speedMode_ == 0) ? 0.2f : 1.2f;
+            slider("X-Flow", &simParams_.inletVelX, mX, MX);
+            slider("Y-Flow", &simParams_.inletVelY, -0.5f, 0.5f);
+            slider("Z-Flow", &simParams_.inletVelZ, -0.5f, 0.5f);
+            ImGui::SliderFloat("Viscosity", &simParams_.tau, 0.5001f, 2.0f);
+            break;
+        }
+        case SidebarTab::Visualizer:
+        {
+            const char* axes[] = { "XY Plane", "XZ Plane", "YZ Plane" };
+            int axis = (int)simParams_.sliceAxis;
+            if (ImGui::Combo("View", &axis, axes, 3)) simParams_.sliceAxis = (uint32_t)axis;
+            int slice = (int)simParams_.sliceIndex;
+            ImGui::SliderInt("Depth", &slice, 0, 127);
+            simParams_.sliceIndex = (uint32_t)slice;
+            ImGui::SliderFloat("Brightness", &simParams_.maxVelocity, 0.01f, 1.0f);
+            break;
+        }
+        case SidebarTab::System:
+        {
+            if (ImGui::Button("Toggle Fullscreen", ImVec2(-1, 35))) {
+                if (!isFullscreen_) { glfwMaximizeWindow(window_); isFullscreen_ = true; }
+                else { glfwRestoreWindow(window_); isFullscreen_ = false; }
+            }
+            ImGui::Text("Grid: %ux%ux%u", simParams_.gridX, simParams_.gridY, simParams_.gridZ);
+            ImGui::SliderFloat("Scale", &gridQuality_, 0.5f, 2.0f);
+            if (ImGui::Button("Re-Voxelize", ImVec2(-1, 35))) applyResolutionPending_ = true;
+            break;
+        }
+    }
+    ImGui::EndChild();
+    ImGui::End();
+}
+
+void VulkanEngine::drawUI_BottomToolbar() {
+    const float barWidth = 400.0f;
+    const float barHeight = 60.0f;
+    ImGui::SetNextWindowPos(ImVec2(((float)windowExtent_.width - barWidth) * 0.5f, (float)windowExtent_.height - barHeight - 20));
+    ImGui::SetNextWindowSize(ImVec2(barWidth, barHeight));
+    ImGui::Begin("BottomBar", nullptr, 
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | 
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
+
+    ImGui::SetCursorPos(ImVec2(10, 10));
+    if (ImGui::Button(simulationRunning_ ? "PAUSE" : "PLAY", ImVec2(80, 40))) simulationRunning_ = !simulationRunning_;
+    
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(100);
+    ImGui::TextDisabled("FPS: %.0f | Steps: %llu", 1000.0f / frameTime_, totalSteps_);
+    
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(barWidth - 90);
+    if (ImGui::Button("RESET", ImVec2(80, 40))) { fluidSolver_.resetToEquilibrium(); totalSteps_ = 0; }
+    
+    ImGui::End();
 
     ImGui::Render();
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);

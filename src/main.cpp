@@ -3,10 +3,14 @@
 // ============================================================================
 
 #include "vk_engine.h"
+#include "logger.h"
 #include <iostream>
 #include <stdexcept>
 
 int main(int argc, char* argv[]) {
+    vwt::Logger::init("vwt_session.log");
+    vwt::Logger::log("Virtual Wind Tunnel starting up...");
+
     std::cout << "╔═══════════════════════════════════════════════════╗\n";
     std::cout << "║   Virtual Wind Tunnel — D3Q19 LBM Simulation    ║\n";
     std::cout << "║   GPU-Accelerated via Vulkan Compute Shaders    ║\n";
