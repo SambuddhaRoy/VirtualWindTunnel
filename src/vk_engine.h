@@ -95,6 +95,8 @@ private:
     float frameTime_         = 0.0f;
     uint64_t totalSteps_     = 0;
     char  meshFilePath_[512] = "";
+    int   velocityUnit_      = 1;   // 0: m/s, 1: km/h, 2: mph, 3: knots
+    int   speedMode_         = 0;   // 0: Regular, 1: Supersonic
 
     // ── Viewport & Quality ──────────────────────────────────────────
     float zoomLevel_         = 1.0f;
@@ -105,7 +107,6 @@ private:
     uint32_t baseGridY_      = 64;
     uint32_t baseGridZ_      = 64;
     bool applyResolutionPending_ = false;
-    int  velocityUnit_           = 0; // 0: m/s, 1: km/h, 2: mph, 3: knots
     bool isWindowResized_        = false;
     bool isFullscreen_           = false;
     int  windowPosX_             = 100;

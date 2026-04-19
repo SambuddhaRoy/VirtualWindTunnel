@@ -71,6 +71,12 @@ struct SimParams {
     uint32_t  sliceIndex  = 32;      // Mid-plane
     float     maxVelocity = 0.15f;   // Color map normalization
     float     turbulence  = 0.0f;    // Inlet turbulence intensity
+    uint32_t  currentEnvironmentIndex = 0; // Index into EnvironmentRegistry
+    
+    // MRT Parameters
+    int       lbmMode     = 1;       // 0: BGK, 1: MRT (default to MRT for stability)
+    float     s_bulk      = 1.2f;    // Relaxation rate for bulk/energy moments
+    float     s_ghost     = 1.5f;    // Relaxation rate for ghost/non-physical moments
 };
 
 // ─── LBM Push Constants (must match shader layout) ──────────────────────
@@ -84,6 +90,10 @@ struct LBMPushConstants {
     float    inletVelZ;
     float    time;
     float    turbulence;
+    // MRT additions
+    float    s_bulk;
+    float    s_ghost;
+    uint32_t lbmMode;
 };
 
 struct VisPushConstants {

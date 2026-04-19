@@ -3,6 +3,8 @@
 // ============================================================================
 
 #include "vk_engine.h"
+#include "environment.h"
+#include "sim_scaler.h"
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -645,34 +647,127 @@ void VulkanEngine::drawImGui(VkCommandBuffer cmd) {
         ImGui::SliderInt("Steps/Frame", &stepsPerFrame_, 1, 64);
     }
 
+    // --- ENVIRONMENT ---
+    if (ImGui::CollapsingHeader("PLANETARY ENVIRONMENT", ImGuiTreeNodeFlags_DefaultOpen)) {
+        auto& profiles = EnvironmentRegistry::getProfiles();
+        std::vector<const char*> profileNames;
+        for (const auto& p : profiles) profileNames.push_back(p.name.c_str());
+
+        int selected = static_cast<int>(simParams_.currentEnvironmentIndex);
+        if (ImGui::Combo("Preset", &selected, profileNames.data(), static_cast<int>(profileNames.size()))) {
+            simParams_.currentEnvironmentIndex = static_cast<uint32_t>(selected);
+            const auto& p = profiles[selected];
+            
+            // Suggest a stable dt for this environment
+            float latticeDx = 0.01f; // Assume 1cm per cell for reference
+            float latticeDt = SimulationScaler::suggestLatticeDt(p.getKinematicViscosity(), latticeDx, 0.6f);
+            
+            // Update tau and normalization
+            simParams_.tau = SimulationScaler::calculateTau(p.getKinematicViscosity(), latticeDx, latticeDt);
+            simParams_.maxVelocity = SimulationScaler::toLatticeVelocity(30.0f, p.speedOfSound); // Normalize to 30m/s
+        }
+        
+        const auto& p = profiles[simParams_.currentEnvironmentIndex];
+        ImGui::TextWrapped("%s", p.description.c_str());
+        ImGui::TextDisabled("Density: %.3f kg/m3", p.density);
+        ImGui::TextDisabled("Viscosity: %.2e Pa.s", p.dynamicViscosity);
+        ImGui::TextDisabled("Sound Speed: %.1f m/s", p.speedOfSound);
+    }
+
+    // --- ENGINE ---
+    if (ImGui::CollapsingHeader("SIMULATION ENGINE", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const char* engineNames[] = { "BGK (Legacy)", "MRT (Advanced Stability)" };
+        ImGui::Combo("Collision Model", &simParams_.lbmMode, engineNames, 2);
+        
+        if (simParams_.lbmMode == 1) { // MRT
+            ImGui::Dummy(ImVec2(0, 5));
+            ImGui::Text("Stability Tuning (MRT Only)");
+            
+            ImGui::SliderFloat("Bulk Relax", &simParams_.s_bulk, 0.1f, 1.9f, "%.2f");
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) simParams_.s_bulk = 1.2f;
+            
+            ImGui::SliderFloat("Ghost Damping", &simParams_.s_ghost, 0.1f, 1.9f, "%.2f");
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) simParams_.s_ghost = 1.5f;
+            
+            ImGui::TextDisabled("Lower values = accuracy, higher = stability.");
+        }
+    }
+
     // --- PHYSICS ---
-    if (ImGui::CollapsingHeader("AERODYNAMICS")) {
+    if (ImGui::CollapsingHeader("AERODYNAMICS", ImGuiTreeNodeFlags_DefaultOpen)) {
         const char* unitNames[] = { "m/s", "km/h", "mph", "knots" };
-        float unitScales[] = { 100.0f, 360.0f, 223.7f, 194.4f }; 
+        // Scaling factors based on Mach 1 (0.577 lattice units) = 343 m/s
+        float unitScales[] = { 594.45f, 2140.0f, 1329.0f, 1155.0f }; 
         
         ImGui::Combo("Velocity Units", &velocityUnit_, unitNames, 4);
         float scale = unitScales[velocityUnit_];
         const char* uName = unitNames[velocityUnit_];
 
-        // Helper for unit-converted sliders
+        const char* modeNames[] = { "Regular (0-400 km/h)", "Supersonic (± Mach 2)" };
+        if (ImGui::Combo("Speed Mode", &speedMode_, modeNames, 2)) {
+            // Snap velocity to new range if out of bounds
+            float minV = (speedMode_ == 0) ? 0.0f : -1.20f;
+            float maxV = (speedMode_ == 0) ? (400.0f / 2140.0f) : 1.20f;
+            simParams_.inletVelX = std::clamp(simParams_.inletVelX, minV, maxV);
+            simParams_.inletVelY = std::clamp(simParams_.inletVelY, minV, maxV);
+            simParams_.inletVelZ = std::clamp(simParams_.inletVelZ, minV, maxV);
+        }
+
+        // Helper for unit-converted sliders with fine control and reset
         auto unitSlider = [&](const char* label, float* latticeVal, float minL, float maxL) {
             float displayVal = (*latticeVal) * scale;
             if (ImGui::SliderFloat(label, &displayVal, minL * scale, maxL * scale, (std::string("%.2f ") + uName).c_str())) {
                 *latticeVal = displayVal / scale;
             }
+
+            // Right-click to reset to zero
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+                *latticeVal = 0.0f;
+            }
+
+            if (ImGui::IsItemHovered()) {
+                float wheel = ImGui::GetIO().MouseWheel;
+                if (wheel != 0.0f) {
+                    float step = (maxL - minL) * 0.005f;
+                    if (ImGui::GetIO().KeyShift) step *= 0.1f;
+                    *latticeVal = std::clamp(*latticeVal + (wheel * step), minL, maxL);
+                }
+            }
         };
 
-        unitSlider("Air Speed (X)", &simParams_.inletVelX, 0.0f, 0.35f);
-        unitSlider("Air Speed (Y)", &simParams_.inletVelY, -0.1f, 0.1f);
-        unitSlider("Air Speed (Z)", &simParams_.inletVelZ, -0.1f, 0.1f);
+        float minX = (speedMode_ == 0) ? 0.0f : -1.20f;
+        float maxX = (speedMode_ == 0) ? (400.0f / 2140.0f) : 1.20f;
+        
+        float minYZ = (speedMode_ == 0) ? -0.20f : -1.20f;
+        float maxYZ = (speedMode_ == 0) ? 0.20f : 1.20f;
+
+        unitSlider("Air Speed (X)", &simParams_.inletVelX, minX, maxX);
+        unitSlider("Air Speed (Y)", &simParams_.inletVelY, minYZ, maxYZ);
+        unitSlider("Air Speed (Z)", &simParams_.inletVelZ, minYZ, maxYZ);
 
         ImGui::Dummy(ImVec2(0, 5));
-        ImGui::SliderFloat("Turbulence", &simParams_.turbulence, 0.0f, 0.1f, "%.4f");
-        ImGui::SliderFloat("Viscosity (tau)", &simParams_.tau, 0.5005f, 1.0f, "%.4f");
+        ImGui::SliderFloat("Turbulence", &simParams_.turbulence, 0.0f, 0.2f, "%.4f");
+        if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) simParams_.turbulence = 0.0f;
+        
+        ImGui::SliderFloat("Viscosity (tau)", &simParams_.tau, 0.5001f, 2.0f, "%.4f");
+        if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) simParams_.tau = 0.6f; // Default tau
+        
+        if (ImGui::IsItemHovered()) {
+             float wheel = ImGui::GetIO().MouseWheel;
+             if (wheel != 0.0f) {
+                 float step = 0.001f;
+                 if (ImGui::GetIO().KeyShift) step *= 0.1f;
+                 simParams_.tau = std::clamp(simParams_.tau + (wheel * step), 0.5001f, 2.0f);
+             }
+        }
         
         float viscosity = (simParams_.tau - 0.5f) / 3.0f;
-        float Re = simParams_.inletVelX * static_cast<float>(simParams_.gridY) / (viscosity + 1e-6f);
+        float speedMag = sqrt(simParams_.inletVelX*simParams_.inletVelX + simParams_.inletVelY*simParams_.inletVelY + simParams_.inletVelZ*simParams_.inletVelZ);
+        float Re = speedMag * static_cast<float>(simParams_.gridY) / (viscosity + 1e-6f);
+        float Mach = speedMag / 0.577f;
         ImGui::TextDisabled("Reynolds Number: %.0f", Re);
+        ImGui::TextDisabled("Mach Number: %.3f", Mach);
+        if (Mach > 1.0f) ImGui::TextColored(ImVec4(1, 0, 0, 1), "SUPERSONIC FLOW DETECTED");
     }
 
     // --- VISUALIZATION ---

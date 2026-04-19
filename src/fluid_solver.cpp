@@ -400,6 +400,9 @@ void FluidSolver::step(VkCommandBuffer cmd, const SimParams& params, uint32_t ti
     pc.inletVelZ  = params.inletVelZ;
     pc.time       = static_cast<float>(timeStep);
     pc.turbulence = params.turbulence;
+    pc.s_bulk     = params.s_bulk;
+    pc.s_ghost    = params.s_ghost;
+    pc.lbmMode    = static_cast<uint32_t>(params.lbmMode);
 
     vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(LBMPushConstants), &pc);
