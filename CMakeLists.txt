@@ -4,6 +4,17 @@ project(VirtualWindTunnel LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(UNIX AND NOT APPLE)
+    set(LINUX TRUE)
+endif()
+
+if(MSVC)
+    add_compile_options(/W4 /permissive-)
+    add_linker_options(/LARGEADDRESSAWARE)
+elseif(LINUX)
+    add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
 # ─── Find packages via vcpkg ────────────────────────────────────────────
 find_package(Vulkan REQUIRED)
 find_package(glfw3 CONFIG REQUIRED)
@@ -44,6 +55,15 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 
 if(WIN32)
     target_link_libraries(${PROJECT_NAME} PRIVATE Comdlg32)
+endif()
+
+# RPATH support for Linux
+if(LINUX)
+    file(GLOB_RECURSE LIBRARY_PATHS "${VULKAN_LIBRARY}/../lib" "*.so*")
+    if(LIBRARY_PATHS)
+        get_filename_component(VULKAN_LIB_DIR ${VULKAN_LIBRARY} DIRECTORY)
+        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-rpath=${VULKAN_LIB_DIR}")
+    endif()
 endif()
 
 target_include_directories(${PROJECT_NAME} PRIVATE
