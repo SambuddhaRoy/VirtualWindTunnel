@@ -4,6 +4,11 @@ project(VirtualWindTunnel LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(MSVC)
+    add_compile_options(/W4 /permissive-)
+    add_linker_options(/LARGEADDRESSAWARE)
+endif()
+
 # ─── Find packages via vcpkg ────────────────────────────────────────────
 find_package(Vulkan REQUIRED)
 find_package(glfw3 CONFIG REQUIRED)
@@ -40,8 +45,11 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     glm::glm
     vk-bootstrap::vk-bootstrap
     GPUOpen::VulkanMemoryAllocator
-    Comdlg32
 )
+
+if(WIN32)
+    target_link_libraries(${PROJECT_NAME} PRIVATE Comdlg32)
+endif()
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/src

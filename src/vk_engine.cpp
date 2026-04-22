@@ -239,10 +239,24 @@ void VulkanEngine::initVulkan() {
 // ════════════════════════════════════════════════════════════════════════
 
 void VulkanEngine::initSwapchain() {
+    // Check present modes and prefer MAILBOX for smoother rendering
+    uint32_t presentModeCount;
+    vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice_, surface_, &presentModeCount, nullptr);
+    std::vector<VkPresentModeKHR> presentModes(presentModeCount);
+    vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice_, surface_, &presentModeCount, presentModes.data());
+
+    VkPresentModeKHR desiredMode = VK_PRESENT_MODE_FIFO_KHR;
+    for (VkPresentModeKHR mode : presentModes) {
+        if (mode == VK_PRESENT_MODE_MAILBOX_KHR) {
+            desiredMode = VK_PRESENT_MODE_MAILBOX_KHR;
+            break;
+        }
+    }
+
     vkb::SwapchainBuilder swapBuilder(physicalDevice_, device_, surface_);
     auto swapResult = swapBuilder
         .use_default_format_selection()
-        .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+        .set_desired_present_mode(desiredMode)
         .set_desired_extent(windowExtent_.width, windowExtent_.height)
         .build();
 
@@ -404,7 +418,11 @@ void VulkanEngine::initImGui() {
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     
     // Load modern font
-    io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 18.0f);
+#ifdef _WIN32
+    io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/segoeui.ttf", 18.0f);
+#else
+    io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18.0f);
+#endif
 
     // ── OLED Black & Purple Design System ──
     ImGuiStyle& style = ImGui::GetStyle();
