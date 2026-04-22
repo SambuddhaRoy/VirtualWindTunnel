@@ -404,7 +404,11 @@ void VulkanEngine::initImGui() {
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     
     // Load modern font
-    io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 18.0f);
+#ifdef _WIN32
+    io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/segoeui.ttf", 18.0f);
+#else
+    io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18.0f);
+#endif
 
     // ── OLED Black & Purple Design System ──
     ImGuiStyle& style = ImGui::GetStyle();
