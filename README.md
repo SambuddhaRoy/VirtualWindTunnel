@@ -38,6 +38,36 @@
 
 ---
 
+## 🐧 **Linux Support**
+
+> [!IMPORTANT]
+> A native Linux build is currently in development. For now, the Windows binary can be run using **Wine**.
+
+### Running on Linux (via Wine)
+
+```bash
+# 1. Install Wine and Vulkan support
+# On Ubuntu/Debian:
+sudo apt install wine vulkan-tools libvulkan1
+
+# On Fedora:
+sudo dnf install wine vulkan-tools
+
+# On Arch Linux:
+sudo pacman -S wine vulkan-icd-loader
+
+# 2. Copy the app to Wine prefix
+cp -r VirtualWindTunnel_v0.0.2-alpha_Windows ~/.wine/drive_c/VirtualWindTunnel
+cd ~/.wine/drive_c/VirtualWindTunnel
+
+# 3. Run the application
+wine VirtualWindTunnel.exe
+```
+
+> **Note:** A native Linux version is being actively worked on and will be available in a future release.
+
+---
+
 ## 🛠️ **Technology Stack**
 
 | Component | Technology |
