@@ -32,7 +32,7 @@
 > [!TIP]
 > **No compilation required!** Grab the latest pre-built alpha release and start simulating in seconds.
 
-### 📥 [**Download v0.0.1-alpha (Windows)**](https://github.com/SambuddhaRoy/VirtualWindTunnel/releases/latest/download/VirtualWindTunnel_v0.0.1-alpha_Windows.zip)
+### 📥 [**Download v0.0.2-alpha (Windows)**](https://github.com/SambuddhaRoy/VirtualWindTunnel/releases/latest/download/VirtualWindTunnel_v0.0.2-alpha_Windows.zip)
 
 *Extract the ZIP and run `VirtualWindTunnel.exe`. Requires [Vulkan Runtime](https://vulkan.lunarg.com/sdk/home).*
 
