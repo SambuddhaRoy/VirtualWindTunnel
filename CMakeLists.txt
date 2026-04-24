@@ -59,8 +59,7 @@ endif()
 
 # RPATH support for Linux
 if(LINUX)
-    file(GLOB_RECURSE LIBRARY_PATHS "${VULKAN_LIBRARY}/../lib" "*.so*")
-    if(LIBRARY_PATHS)
+    if(VULKAN_LIBRARY)
         get_filename_component(VULKAN_LIB_DIR ${VULKAN_LIBRARY} DIRECTORY)
         set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-rpath=${VULKAN_LIB_DIR}")
     endif()

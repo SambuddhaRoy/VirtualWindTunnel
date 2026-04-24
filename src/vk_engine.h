@@ -32,6 +32,7 @@ private:
     void initImGui();
     void initSimulation();
     void initPipelineCache();
+    void savePipelineCache();
     void recreateSwapchain();
     void cleanupSwapchain();
 
@@ -42,7 +43,7 @@ private:
 private:
     void drawUI_Sidebar();
     void drawUI_ContextPanel();
-    void drawUI_BottomToolbar();
+    void drawUI_BottomToolbar(VkCommandBuffer cmd);
     void drawUI_Viewport();
 
     // ── Mesh loading (triggered from UI) ────────────────────────────

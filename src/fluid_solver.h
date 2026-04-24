@@ -54,6 +54,8 @@ private:
 
     bool pingPong_ = false;  // false = A is input, true = B is input
 
+    VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
+
     VkDescriptorPool      descriptorPool_  = VK_NULL_HANDLE;
     VkDescriptorSetLayout descriptorLayout_ = VK_NULL_HANDLE;
     VkDescriptorSet       descriptorSetA_  = VK_NULL_HANDLE; // A->B

@@ -49,6 +49,7 @@ void FluidSolver::init(VkDevice device, VmaAllocator allocator,
     gridX_       = params.gridX;
     gridY_       = params.gridY;
     gridZ_       = params.gridZ;
+    pipelineCache_ = pipelineCache;
 
     createCommandPool();
     createBuffers();
@@ -258,7 +259,7 @@ void FluidSolver::createPipeline() {
     pipelineInfo.stage.module = shaderModule;
     pipelineInfo.stage.pName  = "main";
 
-    vkCreateComputePipelines(device_, pipelineCache, 1, &pipelineInfo, nullptr, &pipeline_);
+    vkCreateComputePipelines(device_, pipelineCache_, 1, &pipelineInfo, nullptr, &pipeline_);
 
     vkDestroyShaderModule(device_, shaderModule, nullptr);
 

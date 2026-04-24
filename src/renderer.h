@@ -49,6 +49,9 @@ private:
     AllocatedImage sliceImage_;
     VkSampler      sliceSampler_ = VK_NULL_HANDLE;
 
+    // Pipeline cache for faster startup
+    VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
+
     // Velocity slice compute pipeline
     VkDescriptorSetLayout sliceComputeLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool      sliceComputePool_   = VK_NULL_HANDLE;

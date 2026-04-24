@@ -666,7 +666,7 @@ void VulkanEngine::drawImGui(VkCommandBuffer cmd) {
     drawUI_Viewport();
     drawUI_Sidebar();
     drawUI_ContextPanel();
-    drawUI_BottomToolbar();
+    drawUI_BottomToolbar(cmd);
 
     ImGui::Render();
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
@@ -873,7 +873,7 @@ void VulkanEngine::drawUI_ContextPanel() {
     ImGui::End();
 }
 
-void VulkanEngine::drawUI_BottomToolbar() {
+void VulkanEngine::drawUI_BottomToolbar(VkCommandBuffer cmd) {
     const float barWidth = 400.0f;
     const float barHeight = 60.0f;
     ImGui::SetNextWindowPos(ImVec2(((float)windowExtent_.width - barWidth) * 0.5f, (float)windowExtent_.height - barHeight - 20));

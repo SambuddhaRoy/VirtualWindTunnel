@@ -24,6 +24,7 @@ void Renderer::init(VkDevice device, VmaAllocator allocator,
     device_      = device;
     allocator_   = allocator;
     macroBuffer_ = macroBuffer;
+    pipelineCache_ = pipelineCache;
 
     createSliceImage(params);
     createSlicePipeline();
@@ -178,7 +179,7 @@ void Renderer::createSlicePipeline() {
     pipelineInfo.stage.module = shaderModule;
     pipelineInfo.stage.pName  = "main";
 
-    vkCreateComputePipelines(device_, pipelineCache, 1, &pipelineInfo, nullptr,
+    vkCreateComputePipelines(device_, pipelineCache_, 1, &pipelineInfo, nullptr,
                              &sliceComputePipeline_);
 
     vkDestroyShaderModule(device_, shaderModule, nullptr);
