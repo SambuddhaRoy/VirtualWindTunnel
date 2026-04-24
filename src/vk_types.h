@@ -103,6 +103,7 @@ struct VisPushConstants {
     uint32_t sliceAxis;
     uint32_t sliceIndex;
     float    maxVelocity;
+    uint32_t visMode;   // 0 = velocity magnitude, 1 = pressure
 };
 
 // ─── Utility: load SPIR-V binary ───────────────────────────────────────

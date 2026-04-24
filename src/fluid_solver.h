@@ -10,7 +10,8 @@ namespace vwt {
 class FluidSolver {
 public:
     void init(VkDevice device, VmaAllocator allocator, VkQueue computeQueue,
-              uint32_t computeQueueFamily, const SimParams& params);
+              uint32_t computeQueueFamily, VkPipelineCache pipelineCache,
+              const SimParams& params);
 
     void destroy();
 
@@ -41,6 +42,7 @@ private:
     VmaAllocator   allocator_  = VK_NULL_HANDLE;
     VkQueue        queue_      = VK_NULL_HANDLE;
     uint32_t       queueFamily_ = 0;
+    VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;  // shared, not owned
 
     uint32_t gridX_ = 0, gridY_ = 0, gridZ_ = 0;
 

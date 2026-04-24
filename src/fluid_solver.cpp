@@ -40,15 +40,17 @@ static AllocatedBuffer createBuffer(VmaAllocator allocator, VkDeviceSize size,
 
 void FluidSolver::init(VkDevice device, VmaAllocator allocator,
                         VkQueue computeQueue, uint32_t computeQueueFamily,
+                        VkPipelineCache pipelineCache,
                         const SimParams& params)
 {
-    device_      = device;
-    allocator_   = allocator;
-    queue_       = computeQueue;
-    queueFamily_ = computeQueueFamily;
-    gridX_       = params.gridX;
-    gridY_       = params.gridY;
-    gridZ_       = params.gridZ;
+    device_        = device;
+    allocator_     = allocator;
+    queue_         = computeQueue;
+    queueFamily_   = computeQueueFamily;
+    pipelineCache_ = pipelineCache;
+    gridX_         = params.gridX;
+    gridY_         = params.gridY;
+    gridZ_         = params.gridZ;
 
     createCommandPool();
     createBuffers();
@@ -99,17 +101,26 @@ void FluidSolver::createBuffers() {
     VkBufferUsageFlags storageUsage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
                                     | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
-    fBufferA_       = createBuffer(allocator_, fSize, storageUsage, VMA_MEMORY_USAGE_GPU_ONLY);
-    fBufferB_       = createBuffer(allocator_, fSize, storageUsage, VMA_MEMORY_USAGE_GPU_ONLY);
-    obstacleBuffer_ = createBuffer(allocator_, obsSize, storageUsage, VMA_MEMORY_USAGE_GPU_ONLY);
+    fBufferA_       = createBuffer(allocator_, fSize, storageUsage, VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
+    fBufferB_       = createBuffer(allocator_, fSize, storageUsage, VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
+    obstacleBuffer_ = createBuffer(allocator_, obsSize, storageUsage, VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
     macroBuffer_    = createBuffer(allocator_, macroSize,
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        VMA_MEMORY_USAGE_GPU_ONLY);
+        VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
 
-    // Staging buffer (CPU-visible) for uploads
-    VkDeviceSize stagingSize = std::max({fSize, obsSize, macroSize});
-    stagingBuffer_ = createBuffer(allocator_, stagingSize,
-        VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY);
+    // Staging buffer: HOST_ACCESS_SEQUENTIAL_WRITE is the correct flag for write-once staging
+    VkBufferCreateInfo stagingBufInfo{};
+    stagingBufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    stagingBufInfo.size  = std::max({fSize, obsSize, macroSize});
+    stagingBufInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+
+    VmaAllocationCreateInfo stagingAllocInfo{};
+    stagingAllocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+    stagingAllocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+                           | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    stagingBuffer_.size = stagingBufInfo.size;
+    vmaCreateBuffer(allocator_, &stagingBufInfo, &stagingAllocInfo,
+                    &stagingBuffer_.buffer, &stagingBuffer_.allocation, nullptr);
 
     deletionQueue_.push([this]() {
         vmaDestroyBuffer(allocator_, fBufferA_.buffer, fBufferA_.allocation);
@@ -244,7 +255,7 @@ void FluidSolver::createPipeline() {
     pipelineInfo.stage.module = shaderModule;
     pipelineInfo.stage.pName  = "main";
 
-    vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline_);
+    vkCreateComputePipelines(device_, pipelineCache_, 1, &pipelineInfo, nullptr, &pipeline_);
 
     vkDestroyShaderModule(device_, shaderModule, nullptr);
 
@@ -262,11 +273,13 @@ void FluidSolver::uploadObstacleMap(const std::vector<uint32_t>& obstacleData) {
     VkDeviceSize dataSize = obstacleData.size() * sizeof(uint32_t);
     assert(dataSize <= stagingBuffer_.size);
 
-    // Copy to staging buffer
+    // Use the persistently-mapped pointer (VMA_ALLOCATION_CREATE_MAPPED_BIT)
     void* mapped = nullptr;
-    vmaMapMemory(allocator_, stagingBuffer_.allocation, &mapped);
-    std::memcpy(mapped, obstacleData.data(), dataSize);
-    vmaUnmapMemory(allocator_, stagingBuffer_.allocation);
+    vmaGetAllocationInfo(allocator_, stagingBuffer_.allocation,
+                         reinterpret_cast<VmaAllocationInfo*>(&mapped));
+    VmaAllocationInfo allocInfo;
+    vmaGetAllocationInfo(allocator_, stagingBuffer_.allocation, &allocInfo);
+    std::memcpy(allocInfo.pMappedData, obstacleData.data(), dataSize);
 
     VkCommandBufferAllocateInfo cmdAllocInfo{};
     cmdAllocInfo.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -326,11 +339,10 @@ void FluidSolver::resetToEquilibrium() {
         }
     }
 
-    // Upload via staging buffer
-    void* mapped = nullptr;
-    vmaMapMemory(allocator_, stagingBuffer_.allocation, &mapped);
-    std::memcpy(mapped, initialF.data(), fSize);
-    vmaUnmapMemory(allocator_, stagingBuffer_.allocation);
+    // Upload via persistently-mapped staging buffer
+    VmaAllocationInfo allocInfo;
+    vmaGetAllocationInfo(allocator_, stagingBuffer_.allocation, &allocInfo);
+    std::memcpy(allocInfo.pMappedData, initialF.data(), fSize);
 
     VkCommandBufferAllocateInfo cmdAllocInfo{};
     cmdAllocInfo.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;

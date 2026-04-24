@@ -12,13 +12,14 @@ public:
     void init(VkDevice device, VmaAllocator allocator,
               VkDescriptorPool imguiPool,
               uint32_t graphicsQueueFamily,
+              VkPipelineCache pipelineCache,
               const SimParams& params,
               VkBuffer macroBuffer);
 
     void destroy();
 
     /// Dispatch the velocity slice compute shader
-    void computeVelocitySlice(VkCommandBuffer cmd, const SimParams& params);
+    void computeVelocitySlice(VkCommandBuffer cmd, const SimParams& params, uint32_t visMode);
 
     /// Record rendering commands to draw the velocity slice to the screen
     void draw(VkCommandBuffer cmd, VkRenderPass renderPass,
@@ -43,6 +44,8 @@ private:
 
     VkDevice       device_    = VK_NULL_HANDLE;
     VmaAllocator   allocator_ = VK_NULL_HANDLE;
+    VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;  // shared, not owned
+    VkImageLayout  currentSliceLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
 
     // Velocity slice compute output
     AllocatedImage sliceImage_;

@@ -17,12 +17,14 @@ namespace vwt {
 void Renderer::init(VkDevice device, VmaAllocator allocator,
                      VkDescriptorPool imguiPool,
                      uint32_t graphicsQueueFamily,
+                     VkPipelineCache pipelineCache,
                      const SimParams& params,
                      VkBuffer macroBuffer)
 {
-    device_      = device;
-    allocator_   = allocator;
-    macroBuffer_ = macroBuffer;
+    device_        = device;
+    allocator_     = allocator;
+    macroBuffer_   = macroBuffer;
+    pipelineCache_ = pipelineCache;
 
     createSliceImage(params);
     createSlicePipeline();
@@ -144,7 +146,33 @@ void Renderer::createSlicePipeline() {
     allocInfo.pSetLayouts        = &sliceComputeLayout_;
     vkAllocateDescriptorSets(device_, &allocInfo, &sliceDescriptorSet_);
 
-    // Pipeline layout with push constants
+    // Write descriptors once at init time (not every frame)
+    VkDescriptorBufferInfo bufInfo{};
+    bufInfo.buffer = macroBuffer_;
+    bufInfo.offset = 0;
+    bufInfo.range  = VK_WHOLE_SIZE;
+
+    VkDescriptorImageInfo imgInfo{};
+    imgInfo.imageView   = sliceImage_.imageView;
+    imgInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    std::array<VkWriteDescriptorSet, 2> writes{};
+    writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet          = sliceDescriptorSet_;
+    writes[0].dstBinding      = 0;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[0].pBufferInfo     = &bufInfo;
+
+    writes[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet          = sliceDescriptorSet_;
+    writes[1].dstBinding      = 1;
+    writes[1].descriptorCount = 1;
+    writes[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[1].pImageInfo      = &imgInfo;
+
+    vkUpdateDescriptorSets(device_, static_cast<uint32_t>(writes.size()),
+                           writes.data(), 0, nullptr);
     VkPushConstantRange pushRange{};
     pushRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     pushRange.offset     = 0;
@@ -177,7 +205,7 @@ void Renderer::createSlicePipeline() {
     pipelineInfo.stage.module = shaderModule;
     pipelineInfo.stage.pName  = "main";
 
-    vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
+    vkCreateComputePipelines(device_, pipelineCache_, 1, &pipelineInfo, nullptr,
                              &sliceComputePipeline_);
 
     vkDestroyShaderModule(device_, shaderModule, nullptr);
@@ -209,52 +237,33 @@ void Renderer::createImGuiTexture(VkDevice device, VkDescriptorPool pool,
 // Dispatch velocity slice compute shader
 // ════════════════════════════════════════════════════════════════════════
 
-void Renderer::computeVelocitySlice(VkCommandBuffer cmd, const SimParams& params)
+void Renderer::computeVelocitySlice(VkCommandBuffer cmd, const SimParams& params, uint32_t visMode)
 {
-    // Update descriptor set only once or when buffer changes (here it's assumed static for simplicity)
-    VkDescriptorBufferInfo bufInfo{};
-    bufInfo.buffer = macroBuffer_;
-    bufInfo.offset = 0;
-    bufInfo.range  = VK_WHOLE_SIZE;
+    // Transition to GENERAL only if not already GENERAL
+    VkImageLayout oldLayout = currentSliceLayout_;
+    if (oldLayout != VK_IMAGE_LAYOUT_GENERAL) {
+        VkImageMemoryBarrier toGeneral{};
+        toGeneral.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        toGeneral.oldLayout           = oldLayout;
+        toGeneral.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
+        toGeneral.image               = sliceImage_.image;
+        toGeneral.subresourceRange    = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+        toGeneral.srcAccessMask       = (oldLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                                        ? VK_ACCESS_SHADER_READ_BIT : 0;
+        toGeneral.dstAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
+        toGeneral.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toGeneral.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 
-    VkDescriptorImageInfo imgInfo{};
-    imgInfo.imageView   = sliceImage_.imageView;
-    imgInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        vkCmdPipelineBarrier(cmd,
+            (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED)
+                ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+                : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &toGeneral);
+        currentSliceLayout_ = VK_IMAGE_LAYOUT_GENERAL;
+    }
 
-    std::array<VkWriteDescriptorSet, 2> writes{};
-    writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet          = sliceDescriptorSet_;
-    writes[0].dstBinding      = 0;
-    writes[0].descriptorCount = 1;
-    writes[0].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    writes[0].pBufferInfo     = &bufInfo;
-
-    writes[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet          = sliceDescriptorSet_;
-    writes[1].dstBinding      = 1;
-    writes[1].descriptorCount = 1;
-    writes[1].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    writes[1].pImageInfo      = &imgInfo;
-
-    vkUpdateDescriptorSets(device_, static_cast<uint32_t>(writes.size()),
-                           writes.data(), 0, nullptr);
-
-    // Transition image to GENERAL for compute writes
-    VkImageMemoryBarrier toGeneral{};
-    toGeneral.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    toGeneral.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
-    toGeneral.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
-    toGeneral.image               = sliceImage_.image;
-    toGeneral.subresourceRange    = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-    toGeneral.srcAccessMask       = 0;
-    toGeneral.dstAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
-
-    vkCmdPipelineBarrier(cmd,
-        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        0, 0, nullptr, 0, nullptr, 1, &toGeneral);
-
-    // Bind and dispatch
+    // Bind and dispatch (descriptors were written once at init)
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, sliceComputePipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                             sliceComputePipelineLayout_, 0, 1,
@@ -267,6 +276,7 @@ void Renderer::computeVelocitySlice(VkCommandBuffer cmd, const SimParams& params
     vpc.sliceAxis   = params.sliceAxis;
     vpc.sliceIndex  = params.sliceIndex;
     vpc.maxVelocity = params.maxVelocity;
+    vpc.visMode     = visMode;
 
     vkCmdPushConstants(cmd, sliceComputePipelineLayout_,
                        VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(VisPushConstants), &vpc);
@@ -275,7 +285,7 @@ void Renderer::computeVelocitySlice(VkCommandBuffer cmd, const SimParams& params
     uint32_t groupsY = (sliceHeight_ + 15) / 16;
     vkCmdDispatch(cmd, groupsX, groupsY, 1);
 
-    // Transition image to SHADER_READ_ONLY for ImGui sampling
+    // Transition to SHADER_READ_ONLY for ImGui sampling
     VkImageMemoryBarrier toRead{};
     toRead.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     toRead.oldLayout           = VK_IMAGE_LAYOUT_GENERAL;
@@ -284,11 +294,14 @@ void Renderer::computeVelocitySlice(VkCommandBuffer cmd, const SimParams& params
     toRead.subresourceRange    = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
     toRead.srcAccessMask       = VK_ACCESS_SHADER_WRITE_BIT;
     toRead.dstAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+    toRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 
     vkCmdPipelineBarrier(cmd,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
         0, 0, nullptr, 0, nullptr, 1, &toRead);
+    currentSliceLayout_ = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 }
 
 // ════════════════════════════════════════════════════════════════════════
