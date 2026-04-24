@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.28)
+cmake_minimum_required(VERSION 3.24)
 project(VirtualWindTunnel LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
@@ -10,7 +10,7 @@ endif()
 
 if(MSVC)
     add_compile_options(/W4 /permissive-)
-    add_linker_options(/LARGEADDRESSAWARE)
+    add_link_options(/LARGEADDRESSAWARE)
 elseif(LINUX)
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
