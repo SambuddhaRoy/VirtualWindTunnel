@@ -1,5 +1,5 @@
 // ============================================================================
-// vk_engine.cpp — Vulkan Engine Implementation
+// vk_engine.cpp
 // ============================================================================
 
 #include "vk_engine.h"
@@ -18,13 +18,13 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 
-#include <iostream>
-#include <fstream>
 #include <chrono>
-#include <thread>
+#include <fstream>
+#include <sstream>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <stdarg.h>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -32,168 +32,97 @@
 #endif
 #include <windows.h>
 #include <commdlg.h>
+static std::string openFileDialog() {
+    OPENFILENAMEA ofn{}; char buf[260]{};
+    ofn.lStructSize = sizeof(ofn); ofn.lpstrFile = buf; ofn.nMaxFile = 260;
+    ofn.lpstrFilter = "3D Models\0*.obj;*.stl;*.glb;*.gltf;*.fbx\0All\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
+    return GetOpenFileNameA(&ofn) ? std::string(buf) : "";
+}
 #endif
 
 namespace vwt {
 
-#ifdef _WIN32
-static std::string openFileDialog() {
-    OPENFILENAMEA ofn;
-    char szFile[260] = { 0 };
-    ZeroMemory(&ofn, sizeof(ofn));
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner   = NULL;
-    ofn.lpstrFile   = szFile;
-    ofn.nMaxFile    = sizeof(szFile);
-    ofn.lpstrFilter = "3D Models (*.obj, *.stl, *.glb, *.gltf, *.fbx)\0*.obj;*.stl;*.glb;*.gltf;*.fbx\0All Files (*.*)\0*.*\0";
-    ofn.nFilterIndex = 1;
-    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
-    if (GetOpenFileNameA(&ofn) == TRUE) return std::string(ofn.lpstrFile);
-    return "";
-}
-#endif
+// ─── UI helpers ──────────────────────────────────────────────────────────────
 
-// ════════════════════════════════════════════════════════════════════════
-// ImGui style helpers
-// ════════════════════════════════════════════════════════════════════════
-
-// Styled section header — returns true when open
-static bool SectionHeader(const char* label, bool defaultOpen = true) {
-    ImGui::PushStyleColor(ImGuiCol_Header,        ImVec4(0.07f,0.07f,0.09f,1.f));
-    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.10f,0.10f,0.14f,1.f));
-    ImGui::PushStyleColor(ImGuiCol_HeaderActive,  ImVec4(0.12f,0.12f,0.17f,1.f));
-    bool open = ImGui::CollapsingHeader(label,
-        defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : 0);
+static bool SectionHeader(const char* label, bool open = true) {
+    ImGui::PushStyleColor(ImGuiCol_Header,        {0.07f,0.07f,0.10f,1.f});
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, {0.10f,0.10f,0.14f,1.f});
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive,  {0.12f,0.12f,0.17f,1.f});
+    bool r = ImGui::CollapsingHeader(label, open ? ImGuiTreeNodeFlags_DefaultOpen : 0);
     ImGui::PopStyleColor(3);
-    return open;
+    return r;
 }
 
-// Thin full-width separator
-static void ThinSep() {
-    ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0.15f,0.15f,0.20f,1.f));
+static void Sep() {
+    ImGui::PushStyleColor(ImGuiCol_Separator, {0.12f,0.12f,0.17f,1.f});
     ImGui::Separator();
     ImGui::PopStyleColor();
 }
 
-// Accent-coloured label + monospaced value on same line
-static void MetricRow(const char* label, const char* valueFmt, ...) {
-    va_list args;
-    va_start(args, valueFmt);
-    char buf[64];
-    vsnprintf(buf, sizeof(buf), valueFmt, args);
-    va_end(args);
-
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f,0.45f,0.55f,1.f));
+static void LabelValue(const char* label, const char* fmt, ...) {
+    va_list a; va_start(a,fmt); char buf[64]; vsnprintf(buf,64,fmt,a); va_end(a);
+    ImGui::PushStyleColor(ImGuiCol_Text, {0.40f,0.40f,0.52f,1.f});
     ImGui::TextUnformatted(label);
     ImGui::PopStyleColor();
-    ImGui::SameLine(ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(buf).x);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f,0.85f,0.92f,1.f));
+    float rw = ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(buf).x;
+    ImGui::SameLine(rw > 0 ? ImGui::GetCursorPosX() + rw : 0);
+    ImGui::PushStyleColor(ImGuiCol_Text, {0.82f,0.82f,0.90f,1.f});
     ImGui::TextUnformatted(buf);
     ImGui::PopStyleColor();
 }
 
-// Small progress bar with tinted fill
-static void MiniBar(float fraction, ImVec4 color, float height = 3.f) {
-    ImVec2 pos  = ImGui::GetCursorScreenPos();
-    float  w    = ImGui::GetContentRegionAvail().x;
+static void TinyBar(float frac, ImVec4 col, float h = 3.f) {
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    float  w = ImGui::GetContentRegionAvail().x;
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(pos, ImVec2(pos.x+w, pos.y+height),
-                      IM_COL32(30,30,40,255), 2.f);
-    dl->AddRectFilled(pos, ImVec2(pos.x+w*fraction, pos.y+height),
-                      ImGui::ColorConvertFloat4ToU32(color), 2.f);
-    ImGui::Dummy(ImVec2(w, height+2));
+    dl->AddRectFilled(p, {p.x+w, p.y+h}, IM_COL32(24,24,34,255), 1.f);
+    float fill = std::clamp(frac, 0.f, 1.f);
+    if (fill > 0)
+        dl->AddRectFilled(p, {p.x+w*fill, p.y+h},
+                          ImGui::ColorConvertFloat4ToU32(col), 1.f);
+    ImGui::Dummy({w, h+2});
 }
 
-// ════════════════════════════════════════════════════════════════════════
-// Public Interface
-// ════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
+// Init / cleanup
+// ════════════════════════════════════════════════════════════════════════════
 
 void VulkanEngine::init() {
+    Logger::init();
+    loadConfig();
     initWindow();
     initVulkan();
     initPipelineCache();
     initSwapchain();
-    initCommands();
-    initSyncStructures();
+    initFrameData();
     initRenderPass();
     initFramebuffers();
     initImGui();
     initSimulation();
-    isInitialized_ = true;
-    std::cout << "[Engine] Initialization complete.\n";
-}
-
-void VulkanEngine::run() {
-    while (!glfwWindowShouldClose(window_)) {
-        if (applyResolutionPending_) {
-            vkDeviceWaitIdle(device_);
-            simParams_.gridX = std::max(16u, static_cast<uint32_t>(baseGridX_ * gridQuality_));
-            simParams_.gridY = std::max(16u, static_cast<uint32_t>(baseGridY_ * gridQuality_));
-            simParams_.gridZ = std::max(16u, static_cast<uint32_t>(baseGridZ_ * gridQuality_));
-            fluidSolver_.destroy();
-            renderer_.destroy();
-            initSimulation();
-            if (meshLoaded_) loadMeshFromFile(meshFilePath_);
-            applyResolutionPending_ = false;
-        }
-
-        int w, h;
-        glfwGetFramebufferSize(window_, &w, &h);
-        if (w > 0 && h > 0 &&
-            (static_cast<uint32_t>(w) != windowExtent_.width ||
-             static_cast<uint32_t>(h) != windowExtent_.height)) {
-            windowExtent_.width  = static_cast<uint32_t>(w);
-            windowExtent_.height = static_cast<uint32_t>(h);
-            recreateSwapchain();
-        }
-
-        auto frameStart = std::chrono::high_resolution_clock::now();
-        glfwPollEvents();
-        drawFrame();
-        auto frameEnd = std::chrono::high_resolution_clock::now();
-        frameTime_    = std::chrono::duration<float, std::milli>(frameEnd - frameStart).count();
-        avgFrameTime_ = avgFrameTime_ * 0.95f + frameTime_ * 0.05f;
-
-        // Update FPS history ring buffer
-        float fps = (frameTime_ > 0.f) ? 1000.f / frameTime_ : 0.f;
-        fpsHistory_[fpsHistIdx_++ % kHistLen] = fps;
-
-        // Simulate convergence residual (replace with real readback when available)
-        if (simulationRunning_ && meshLoaded_) {
-            float targetR = 1e-5f + std::exp(-static_cast<float>(totalSteps_) * 0.0002f) * 0.9f;
-            simulatedResidual_ = simulatedResidual_ * 0.98f + targetR * 0.02f;
-        }
-        residualHistory_[residualHistIdx_++ % kHistLen] = std::log10(std::max(simulatedResidual_, 1e-9f));
-
-        // Query VMA budget
-        VmaBudget budgets[VK_MAX_MEMORY_HEAPS];
-        vmaGetHeapBudgets(allocator_, budgets);
-        vramBudgetBytes_ = 0; vramUsageBytes_ = 0;
-        for (uint32_t i = 0; i < 8; ++i) {
-            vramBudgetBytes_ = std::max(vramBudgetBytes_, budgets[i].budget);
-            vramUsageBytes_  = std::max(vramUsageBytes_,  budgets[i].usage);
-        }
-
-        // Estimate crude aero coefficients from inlet velocity
-        float v = simParams_.inletVelX;
-        dragCoeff_ = meshLoaded_ ? 0.28f + 0.04f * std::sin(static_cast<float>(totalSteps_)*0.001f) : 0.f;
-        liftCoeff_ = meshLoaded_ ? -1.72f + 0.06f * std::cos(static_cast<float>(totalSteps_)*0.0012f) : 0.f;
-        (void)v;
-    }
-    vkDeviceWaitIdle(device_);
-    savePipelineCache();
+    initialized_ = true;
+    Logger::log("Engine initialized.");
 }
 
 void VulkanEngine::cleanup() {
-    if (!isInitialized_) return;
+    if (!initialized_) return;
     vkDeviceWaitIdle(device_);
+    saveConfig();
+    savePipelineCache();
     renderer_.destroy();
     fluidSolver_.destroy();
     cleanupSwapchain();
+    for (auto& f : frames_) {
+        vkDestroyCommandPool(device_, f.commandPool, nullptr);
+        vkDestroySemaphore(device_, f.presentSemaphore, nullptr);
+        vkDestroySemaphore(device_, f.renderSemaphore, nullptr);
+        vkDestroyFence(device_, f.renderFence, nullptr);
+    }
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
-    mainDeletionQueue_.flush();
+    mainDQ_.flush();
     vmaDestroyAllocator(allocator_);
     vkDestroyDevice(device_, nullptr);
     vkDestroySurfaceKHR(instance_, surface_, nullptr);
@@ -203,9 +132,104 @@ void VulkanEngine::cleanup() {
     glfwTerminate();
 }
 
-// ════════════════════════════════════════════════════════════════════════
+void VulkanEngine::run() {
+    while (!glfwWindowShouldClose(window_)) {
+        if (resizePending_) {
+            vkDeviceWaitIdle(device_);
+            simParams_.gridX = std::max(16u, uint32_t(baseGridX_ * gridQuality_));
+            simParams_.gridY = std::max(16u, uint32_t(baseGridY_ * gridQuality_));
+            simParams_.gridZ = std::max(16u, uint32_t(baseGridZ_ * gridQuality_));
+            fluidSolver_.destroy();
+            renderer_.destroy();
+            initSimulation();
+            if (meshLoaded_) loadMesh(meshPath_);
+            resizePending_ = false;
+        }
+
+        int fw, fh;
+        glfwGetFramebufferSize(window_, &fw, &fh);
+        if (fw > 0 && fh > 0 &&
+            (uint32_t(fw) != windowExtent_.width || uint32_t(fh) != windowExtent_.height)) {
+            windowExtent_ = { uint32_t(fw), uint32_t(fh) };
+            recreateSwapchain();
+        }
+
+        auto t0 = std::chrono::high_resolution_clock::now();
+        glfwPollEvents();
+        processKeyboard();
+        drawFrame();
+        auto t1 = std::chrono::high_resolution_clock::now();
+        float ms = std::chrono::duration<float,std::milli>(t1-t0).count();
+        avgFrameMs_ = avgFrameMs_*0.95f + ms*0.05f;
+
+        float fps = avgFrameMs_ > 0 ? 1000.f / avgFrameMs_ : 0;
+        fpsHistory_[fpsHistIdx_++ % kHist] = fps;
+
+        if (simRunning_ && meshLoaded_) {
+            float target = 1e-5f + std::exp(-float(totalSteps_)*0.00015f)*0.9f;
+            simResidual_ = simResidual_*0.97f + target*0.03f;
+        }
+        residualHistory_[fpsHistIdx_ % kHist] = std::log10(std::max(simResidual_, 1e-9f));
+
+        // VRAM budget
+        VmaBudget budgets[VK_MAX_MEMORY_HEAPS];
+        vmaGetHeapBudgets(allocator_, budgets);
+        vramBudget_ = 0; vramUsage_ = 0;
+        for (int i = 0; i < 8; ++i) {
+            vramBudget_ = std::max(vramBudget_, budgets[i].budget);
+            vramUsage_  = std::max(vramUsage_,  budgets[i].usage);
+        }
+
+        // Update window title
+        char title[128];
+        snprintf(title, sizeof(title), "Virtual Wind Tunnel  |  %.0f fps  |  step %llu",
+                 fps, totalSteps_);
+        glfwSetWindowTitle(window_, title);
+    }
+    vkDeviceWaitIdle(device_);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Keyboard
+// ════════════════════════════════════════════════════════════════════════════
+
+void VulkanEngine::keyCallback(GLFWwindow* w, int key, int, int action, int) {
+    if (action != GLFW_PRESS) return;
+    auto* eng = static_cast<VulkanEngine*>(glfwGetWindowUserPointer(w));
+    if (!eng) return;
+
+    switch (key) {
+    case GLFW_KEY_SPACE:
+        eng->simRunning_ = !eng->simRunning_; break;
+    case GLFW_KEY_R:
+        eng->fluidSolver_.resetToEquilibrium();
+        eng->totalSteps_ = 0; eng->simResidual_ = 1.f; eng->simRunning_ = false; break;
+    case GLFW_KEY_1: eng->simParams_.visMode = VisMode::Velocity;   break;
+    case GLFW_KEY_2: eng->simParams_.visMode = VisMode::Pressure;   break;
+    case GLFW_KEY_3: eng->simParams_.visMode = VisMode::Vorticity;  break;
+    case GLFW_KEY_4: eng->simParams_.visMode = VisMode::QCriterion; break;
+    case GLFW_KEY_EQUAL:
+    case GLFW_KEY_KP_ADD:
+        eng->stepsPerFrame_ = std::min(64, eng->stepsPerFrame_ + 1); break;
+    case GLFW_KEY_MINUS:
+    case GLFW_KEY_KP_SUBTRACT:
+        eng->stepsPerFrame_ = std::max(1,  eng->stepsPerFrame_ - 1); break;
+    case GLFW_KEY_F11:
+        if (!eng->fullscreen_) { glfwMaximizeWindow(w); eng->fullscreen_ = true; }
+        else { glfwRestoreWindow(w); eng->fullscreen_ = false; }
+        break;
+    case GLFW_KEY_ESCAPE:
+        eng->zoomLevel_ = 1.f; eng->panX_ = 0; eng->panY_ = 0; break;
+    }
+}
+
+void VulkanEngine::processKeyboard() {
+    // Nothing extra needed — handled via callback
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // Window
-// ════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
 
 void VulkanEngine::initWindow() {
     glfwInit();
@@ -215,245 +239,177 @@ void VulkanEngine::initWindow() {
                                "Virtual Wind Tunnel", nullptr, nullptr);
     glfwSetWindowUserPointer(window_, this);
     glfwSetDropCallback(window_, dropCallback);
-    glfwGetWindowPos(window_, &windowPosX_, &windowPosY_);
+    glfwSetKeyCallback(window_, keyCallback);
 }
 
-void VulkanEngine::dropCallback(GLFWwindow* window, int count, const char** paths) {
-    if (count > 0) {
-        auto* engine = static_cast<VulkanEngine*>(glfwGetWindowUserPointer(window));
-        if (engine) {
-            snprintf(engine->meshFilePath_, sizeof(engine->meshFilePath_), "%s", paths[0]);
-            engine->loadMeshFromFile(engine->meshFilePath_);
-        }
-    }
+void VulkanEngine::dropCallback(GLFWwindow* w, int n, const char** paths) {
+    if (n < 1) return;
+    auto* e = static_cast<VulkanEngine*>(glfwGetWindowUserPointer(w));
+    if (e) { snprintf(e->meshPath_, 512, "%s", paths[0]); e->loadMesh(e->meshPath_); }
 }
 
-// ════════════════════════════════════════════════════════════════════════
-// Vulkan Instance & Device
-// ════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
+// Vulkan
+// ════════════════════════════════════════════════════════════════════════════
 
 void VulkanEngine::initVulkan() {
-    vkb::InstanceBuilder instBuilder;
-    auto instResult = instBuilder
-        .set_app_name("VirtualWindTunnel")
-        .request_validation_layers(true)
-        .use_default_debug_messenger()
-        .require_api_version(1, 3, 0)
-        .build();
-    if (!instResult)
-        throw std::runtime_error("Failed to create Vulkan instance: " + instResult.error().message());
-
-    vkb::Instance vkbInst = instResult.value();
-    instance_       = vkbInst.instance;
-    debugMessenger_ = vkbInst.debug_messenger;
+    vkb::InstanceBuilder ib;
+    auto ir = ib.set_app_name("VirtualWindTunnel")
+               .request_validation_layers(true)
+               .use_default_debug_messenger()
+               .require_api_version(1,3,0)
+               .build();
+    if (!ir) throw std::runtime_error("Vulkan instance: " + ir.error().message());
+    instance_       = ir.value().instance;
+    debugMessenger_ = ir.value().debug_messenger;
 
     glfwCreateWindowSurface(instance_, window_, nullptr, &surface_);
 
-    vkb::PhysicalDeviceSelector selector(vkbInst);
-    auto physResult = selector
-        .set_minimum_version(1, 3)
-        .set_surface(surface_)
-        .prefer_gpu_device_type(vkb::PreferredDeviceType::discrete)
-        .select();
-    if (!physResult)
-        throw std::runtime_error("Failed to select physical device: " + physResult.error().message());
-
-    physicalDevice_ = physResult.value().physical_device;
+    vkb::PhysicalDeviceSelector sel(ir.value());
+    auto pr = sel.set_minimum_version(1,3).set_surface(surface_)
+               .prefer_gpu_device_type(vkb::PreferredDeviceType::discrete).select();
+    if (!pr) throw std::runtime_error("Physical device: " + pr.error().message());
+    physDevice_ = pr.value().physical_device;
 
     VkPhysicalDeviceProperties props;
-    vkGetPhysicalDeviceProperties(physicalDevice_, &props);
+    vkGetPhysicalDeviceProperties(physDevice_, &props);
     snprintf(gpuName_, sizeof(gpuName_), "%s", props.deviceName);
-    std::cout << "[Engine] GPU: " << gpuName_ << "\n";
+    Logger::log("GPU: " + std::string(gpuName_));
 
-    vkb::DeviceBuilder devBuilder(physResult.value());
-    auto devResult = devBuilder.build();
-    if (!devResult)
-        throw std::runtime_error("Failed to create logical device: " + devResult.error().message());
+    vkb::DeviceBuilder db(pr.value());
+    auto dr = db.build();
+    if (!dr) throw std::runtime_error("Device: " + dr.error().message());
+    device_              = dr.value().device;
+    graphicsQueue_       = dr.value().get_queue(vkb::QueueType::graphics).value();
+    graphicsQueueFamily_ = dr.value().get_queue_index(vkb::QueueType::graphics).value();
 
-    vkb::Device vkbDev = devResult.value();
-    device_              = vkbDev.device;
-    graphicsQueue_       = vkbDev.get_queue(vkb::QueueType::graphics).value();
-    graphicsQueueFamily_ = vkbDev.get_queue_index(vkb::QueueType::graphics).value();
-
-    // Try to find a dedicated async-compute queue family
-    auto computeResult = vkbDev.get_dedicated_queue(vkb::QueueType::compute);
-    if (computeResult.has_value()) {
-        computeQueue_       = computeResult.value();
-        computeQueueFamily_ = vkbDev.get_dedicated_queue_index(vkb::QueueType::compute).value();
+    auto cq = dr.value().get_dedicated_queue(vkb::QueueType::compute);
+    if (cq.has_value()) {
+        computeQueue_       = cq.value();
+        computeQueueFamily_ = dr.value().get_dedicated_queue_index(vkb::QueueType::compute).value();
         hasAsyncCompute_    = true;
-        std::cout << "[Engine] Async compute queue available (family " << computeQueueFamily_ << ")\n";
+        Logger::log("Async compute queue active (family " + std::to_string(computeQueueFamily_) + ")");
     } else {
-        // Fall back to the graphics queue, which also supports compute on most GPUs
         computeQueue_       = graphicsQueue_;
         computeQueueFamily_ = graphicsQueueFamily_;
-        hasAsyncCompute_    = false;
-        std::cout << "[Engine] No dedicated compute queue; sharing graphics queue.\n";
     }
 
-    VmaAllocatorCreateInfo allocatorInfo{};
-    allocatorInfo.physicalDevice = physicalDevice_;
-    allocatorInfo.device         = device_;
-    allocatorInfo.instance       = instance_;
-    vmaCreateAllocator(&allocatorInfo, &allocator_);
+    VmaAllocatorCreateInfo vai{};
+    vai.physicalDevice = physDevice_; vai.device = device_; vai.instance = instance_;
+    vmaCreateAllocator(&vai, &allocator_);
 }
 
-// ════════════════════════════════════════════════════════════════════════
-// Pipeline Cache (disk-backed)
-// ════════════════════════════════════════════════════════════════════════
-
 void VulkanEngine::initPipelineCache() {
-    const char* cachePath = "pipeline_cache.bin";
-    std::vector<char> cacheData;
-
-    std::ifstream cacheFile(cachePath, std::ios::binary | std::ios::ate);
-    if (cacheFile.is_open()) {
-        size_t sz = static_cast<size_t>(cacheFile.tellg());
-        cacheData.resize(sz);
-        cacheFile.seekg(0);
-        cacheFile.read(cacheData.data(), static_cast<std::streamsize>(sz));
-        std::cout << "[Engine] Loaded pipeline cache (" << sz << " bytes)\n";
+    const char* path = "pipeline_cache.bin";
+    std::vector<char> data;
+    if (std::ifstream f(path, std::ios::binary|std::ios::ate); f.is_open()) {
+        data.resize(size_t(f.tellg())); f.seekg(0);
+        f.read(data.data(), std::streamsize(data.size()));
+        Logger::log("Pipeline cache loaded (" + std::to_string(data.size()) + " bytes)");
     }
-
-    VkPipelineCacheCreateInfo info{};
-    info.sType           = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
-    info.initialDataSize = cacheData.size();
-    info.pInitialData    = cacheData.empty() ? nullptr : cacheData.data();
-    vkCreatePipelineCache(device_, &info, nullptr, &pipelineCache_);
-
-    mainDeletionQueue_.push([this]() {
-        vkDestroyPipelineCache(device_, pipelineCache_, nullptr);
-    });
+    VkPipelineCacheCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+    ci.initialDataSize = data.size();
+    ci.pInitialData    = data.empty() ? nullptr : data.data();
+    VK_CHECK(vkCreatePipelineCache(device_, &ci, nullptr, &pipelineCache_));
+    mainDQ_.push([this](){ vkDestroyPipelineCache(device_, pipelineCache_, nullptr); });
 }
 
 void VulkanEngine::savePipelineCache() {
-    if (pipelineCache_ == VK_NULL_HANDLE) return;
-    size_t dataSize = 0;
-    vkGetPipelineCacheData(device_, pipelineCache_, &dataSize, nullptr);
-    if (dataSize == 0) return;
-    std::vector<uint8_t> data(dataSize);
-    vkGetPipelineCacheData(device_, pipelineCache_, &dataSize, data.data());
+    size_t sz = 0;
+    vkGetPipelineCacheData(device_, pipelineCache_, &sz, nullptr);
+    if (!sz) return;
+    std::vector<uint8_t> d(sz);
+    vkGetPipelineCacheData(device_, pipelineCache_, &sz, d.data());
     std::ofstream f("pipeline_cache.bin", std::ios::binary);
-    f.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(dataSize));
-    std::cout << "[Engine] Saved pipeline cache (" << dataSize << " bytes)\n";
+    f.write(reinterpret_cast<const char*>(d.data()), std::streamsize(sz));
+    Logger::log("Pipeline cache saved (" + std::to_string(sz) + " bytes)");
 }
-
-// ════════════════════════════════════════════════════════════════════════
-// Swapchain
-// ════════════════════════════════════════════════════════════════════════
 
 void VulkanEngine::initSwapchain() {
-    vkb::SwapchainBuilder swapBuilder(physicalDevice_, device_, surface_);
-    auto swapResult = swapBuilder
-        .use_default_format_selection()
-        .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
-        .set_desired_extent(windowExtent_.width, windowExtent_.height)
-        .build();
-    if (!swapResult)
-        throw std::runtime_error("Failed to create swapchain: " + swapResult.error().message());
-
-    vkb::Swapchain vkbSwap = swapResult.value();
-    swapchain_           = vkbSwap.swapchain;
-    swapchainFormat_     = vkbSwap.image_format;
-    swapchainImages_     = vkbSwap.get_images().value();
-    swapchainImageViews_ = vkbSwap.get_image_views().value();
+    vkb::SwapchainBuilder sb(physDevice_, device_, surface_);
+    auto sr = sb.use_default_format_selection()
+               .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+               .set_desired_extent(windowExtent_.width, windowExtent_.height)
+               .build();
+    if (!sr) throw std::runtime_error("Swapchain: " + sr.error().message());
+    swapchain_  = sr.value().swapchain;
+    swapchainFmt_ = sr.value().image_format;
+    swapImages_   = sr.value().get_images().value();
+    swapViews_    = sr.value().get_image_views().value();
 }
 
-void VulkanEngine::initCommands() {
-    VkCommandPoolCreateInfo poolInfo{};
-    poolInfo.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    poolInfo.queueFamilyIndex = graphicsQueueFamily_;
-    poolInfo.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    vkCreateCommandPool(device_, &poolInfo, nullptr, &commandPool_);
+void VulkanEngine::initFrameData() {
+    for (auto& f : frames_) {
+        VkCommandPoolCreateInfo pi{};
+        pi.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        pi.queueFamilyIndex = graphicsQueueFamily_;
+        pi.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        VK_CHECK(vkCreateCommandPool(device_, &pi, nullptr, &f.commandPool));
 
-    VkCommandBufferAllocateInfo cmdInfo{};
-    cmdInfo.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    cmdInfo.commandPool        = commandPool_;
-    cmdInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    cmdInfo.commandBufferCount = 1;
-    vkAllocateCommandBuffers(device_, &cmdInfo, &commandBuffer_);
+        VkCommandBufferAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        ai.commandPool = f.commandPool;
+        ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        ai.commandBufferCount = 1;
+        VK_CHECK(vkAllocateCommandBuffers(device_, &ai, &f.commandBuffer));
 
-    mainDeletionQueue_.push([this]() {
-        vkDestroyCommandPool(device_, commandPool_, nullptr);
-    });
-}
+        VkFenceCreateInfo fi{};
+        fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+        VK_CHECK(vkCreateFence(device_, &fi, nullptr, &f.renderFence));
 
-void VulkanEngine::initSyncStructures() {
-    VkFenceCreateInfo fenceInfo{};
-    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-    vkCreateFence(device_, &fenceInfo, nullptr, &renderFence_);
-
-    VkSemaphoreCreateInfo semInfo{};
-    semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-    vkCreateSemaphore(device_, &semInfo, nullptr, &presentSemaphore_);
-    vkCreateSemaphore(device_, &semInfo, nullptr, &renderSemaphore_);
-
-    mainDeletionQueue_.push([this]() {
-        vkDestroyFence(device_, renderFence_, nullptr);
-        vkDestroySemaphore(device_, presentSemaphore_, nullptr);
-        vkDestroySemaphore(device_, renderSemaphore_, nullptr);
-    });
+        VkSemaphoreCreateInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        VK_CHECK(vkCreateSemaphore(device_, &si, nullptr, &f.presentSemaphore));
+        VK_CHECK(vkCreateSemaphore(device_, &si, nullptr, &f.renderSemaphore));
+    }
 }
 
 void VulkanEngine::initRenderPass() {
-    VkAttachmentDescription colorAtt{};
-    colorAtt.format         = swapchainFormat_;
-    colorAtt.samples        = VK_SAMPLE_COUNT_1_BIT;
-    colorAtt.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colorAtt.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAtt.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    colorAtt.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    colorAtt.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
-    colorAtt.finalLayout    = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    VkAttachmentDescription ca{};
+    ca.format = swapchainFmt_; ca.samples = VK_SAMPLE_COUNT_1_BIT;
+    ca.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; ca.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    ca.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    ca.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    ca.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    ca.finalLayout   = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
-    VkAttachmentReference colorRef{};
-    colorRef.attachment = 0;
-    colorRef.layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-    VkSubpassDescription subpass{};
-    subpass.pipelineBindPoint    = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments    = &colorRef;
+    VkAttachmentReference cr{ 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+    VkSubpassDescription sub{};
+    sub.pipelineBindPoint    = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sub.colorAttachmentCount = 1; sub.pColorAttachments = &cr;
 
     VkSubpassDependency dep{};
-    dep.srcSubpass    = VK_SUBPASS_EXTERNAL;
-    dep.dstSubpass    = 0;
+    dep.srcSubpass = VK_SUBPASS_EXTERNAL; dep.dstSubpass = 0;
     dep.srcStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dep.srcAccessMask = 0;
     dep.dstStageMask  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     dep.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 
-    VkRenderPassCreateInfo rpInfo{};
-    rpInfo.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    rpInfo.attachmentCount = 1;
-    rpInfo.pAttachments    = &colorAtt;
-    rpInfo.subpassCount    = 1;
-    rpInfo.pSubpasses      = &subpass;
-    rpInfo.dependencyCount = 1;
-    rpInfo.pDependencies   = &dep;
-    vkCreateRenderPass(device_, &rpInfo, nullptr, &renderPass_);
+    VkRenderPassCreateInfo ri{};
+    ri.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    ri.attachmentCount = 1; ri.pAttachments = &ca;
+    ri.subpassCount = 1;    ri.pSubpasses   = &sub;
+    ri.dependencyCount = 1; ri.pDependencies = &dep;
+    VK_CHECK(vkCreateRenderPass(device_, &ri, nullptr, &renderPass_));
 }
 
 void VulkanEngine::initFramebuffers() {
-    framebuffers_.resize(swapchainImageViews_.size());
-    for (size_t i = 0; i < swapchainImageViews_.size(); ++i) {
-        VkFramebufferCreateInfo fbInfo{};
-        fbInfo.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        fbInfo.renderPass      = renderPass_;
-        fbInfo.attachmentCount = 1;
-        fbInfo.pAttachments    = &swapchainImageViews_[i];
-        fbInfo.width           = windowExtent_.width;
-        fbInfo.height          = windowExtent_.height;
-        fbInfo.layers          = 1;
-        vkCreateFramebuffer(device_, &fbInfo, nullptr, &framebuffers_[i]);
+    framebuffers_.resize(swapViews_.size());
+    for (size_t i = 0; i < swapViews_.size(); ++i) {
+        VkFramebufferCreateInfo fi{};
+        fi.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fi.renderPass = renderPass_; fi.attachmentCount = 1; fi.pAttachments = &swapViews_[i];
+        fi.width = windowExtent_.width; fi.height = windowExtent_.height; fi.layers = 1;
+        VK_CHECK(vkCreateFramebuffer(device_, &fi, nullptr, &framebuffers_[i]));
     }
 }
 
 void VulkanEngine::cleanupSwapchain() {
     vkDeviceWaitIdle(device_);
-    for (auto& fb : framebuffers_) vkDestroyFramebuffer(device_, fb, nullptr);
+    for (auto fb : framebuffers_) vkDestroyFramebuffer(device_, fb, nullptr);
     vkDestroyRenderPass(device_, renderPass_, nullptr);
-    for (auto& iv : swapchainImageViews_) vkDestroyImageView(device_, iv, nullptr);
+    for (auto iv : swapViews_) vkDestroyImageView(device_, iv, nullptr);
     vkDestroySwapchainKHR(device_, swapchain_, nullptr);
 }
 
@@ -464,875 +420,763 @@ void VulkanEngine::recreateSwapchain() {
     initFramebuffers();
 }
 
-// ════════════════════════════════════════════════════════════════════════
-// ImGui — refined dark style
-// ════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
+// ImGui style
+// ════════════════════════════════════════════════════════════════════════════
 
 void VulkanEngine::initImGui() {
-    VkDescriptorPoolSize poolSizes[] = {
-        { VK_DESCRIPTOR_TYPE_SAMPLER,                100 },
-        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 100 },
-        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,           10 },
-        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,          10 },
+    VkDescriptorPoolSize ps[] = {
+        {VK_DESCRIPTOR_TYPE_SAMPLER,                100},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 100},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,           10},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,          10},
     };
-    VkDescriptorPoolCreateInfo poolInfo{};
-    poolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    poolInfo.maxSets       = 100;
-    poolInfo.poolSizeCount = 4;
-    poolInfo.pPoolSizes    = poolSizes;
-    vkCreateDescriptorPool(device_, &poolInfo, nullptr, &imguiPool_);
+    VkDescriptorPoolCreateInfo pi{};
+    pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    pi.maxSets = 100; pi.poolSizeCount = 4; pi.pPoolSizes = ps;
+    VK_CHECK(vkCreateDescriptorPool(device_, &pi, nullptr, &imguiPool_));
 
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.IniFilename = nullptr;  // We manage config ourselves
 
 #ifdef _WIN32
-    io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/segoeui.ttf", 15.0f);
-    // Add a slightly smaller font for dense readouts
-    io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/consola.ttf", 12.0f);
+    io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/segoeui.ttf",  15.f);
+    io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/consola.ttf",  12.f);
 #else
-    io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 15.0f);
-    io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 12.0f);
+    io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",     15.f);
+    io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 12.f);
 #endif
 
-    // ── Precision dark theme ─────────────────────────────────────────
     ImGuiStyle& s = ImGui::GetStyle();
-    s.WindowRounding    = 0.0f;   // Flat docked panels
-    s.ChildRounding     = 4.0f;
-    s.FrameRounding     = 4.0f;
-    s.PopupRounding     = 6.0f;
-    s.ScrollbarRounding = 4.0f;
-    s.GrabRounding      = 4.0f;
-    s.TabRounding       = 4.0f;
-    s.WindowBorderSize  = 0.0f;
-    s.ChildBorderSize   = 0.0f;
-    s.FrameBorderSize   = 0.0f;
-    s.PopupBorderSize   = 1.0f;
-    s.ItemSpacing       = ImVec2(8, 5);
-    s.ItemInnerSpacing  = ImVec2(6, 4);
-    s.WindowPadding     = ImVec2(12, 10);
-    s.FramePadding      = ImVec2(8, 4);
-    s.IndentSpacing     = 14.0f;
-    s.ScrollbarSize     = 10.0f;
-    s.GrabMinSize       = 10.0f;
+    s.WindowRounding = 0.f; s.ChildRounding = 4.f; s.FrameRounding = 4.f;
+    s.PopupRounding  = 6.f; s.TabRounding   = 4.f; s.GrabRounding  = 4.f;
+    s.WindowBorderSize = 0.f; s.FrameBorderSize = 0.f;
+    s.ItemSpacing    = {8,5}; s.ItemInnerSpacing = {6,4};
+    s.WindowPadding  = {12,10}; s.FramePadding = {8,4};
+    s.IndentSpacing  = 14.f; s.ScrollbarSize = 10.f;
 
-    ImVec4* c = s.Colors;
-    // Backgrounds
-    c[ImGuiCol_WindowBg]            = ImVec4(0.051f, 0.051f, 0.067f, 1.00f); // #0d0d11
-    c[ImGuiCol_ChildBg]             = ImVec4(0.067f, 0.067f, 0.082f, 1.00f); // #111114
-    c[ImGuiCol_PopupBg]             = ImVec4(0.078f, 0.078f, 0.098f, 1.00f);
-    // Text
-    c[ImGuiCol_Text]                = ImVec4(0.82f, 0.82f, 0.88f, 1.00f);
-    c[ImGuiCol_TextDisabled]        = ImVec4(0.30f, 0.30f, 0.38f, 1.00f);
-    // Borders
-    c[ImGuiCol_Border]              = ImVec4(0.12f, 0.12f, 0.16f, 1.00f);
-    c[ImGuiCol_BorderShadow]        = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
-    // Frames
-    c[ImGuiCol_FrameBg]             = ImVec4(0.09f, 0.09f, 0.12f, 1.00f);
-    c[ImGuiCol_FrameBgHovered]      = ImVec4(0.12f, 0.12f, 0.16f, 1.00f);
-    c[ImGuiCol_FrameBgActive]       = ImVec4(0.15f, 0.15f, 0.20f, 1.00f);
-    // Title
-    c[ImGuiCol_TitleBg]             = ImVec4(0.04f, 0.04f, 0.05f, 1.00f);
-    c[ImGuiCol_TitleBgActive]       = ImVec4(0.06f, 0.06f, 0.08f, 1.00f);
-    c[ImGuiCol_TitleBgCollapsed]    = ImVec4(0.04f, 0.04f, 0.05f, 1.00f);
-    // Scrollbar
-    c[ImGuiCol_ScrollbarBg]         = ImVec4(0.04f, 0.04f, 0.05f, 1.00f);
-    c[ImGuiCol_ScrollbarGrab]       = ImVec4(0.20f, 0.20f, 0.26f, 1.00f);
-    c[ImGuiCol_ScrollbarGrabHovered]= ImVec4(0.28f, 0.28f, 0.36f, 1.00f);
-    c[ImGuiCol_ScrollbarGrabActive] = ImVec4(0.36f, 0.36f, 0.46f, 1.00f);
-    // Accent — teal
-    static constexpr ImVec4 kAccent  = ImVec4(0.11f, 0.82f, 0.63f, 1.00f); // #1dd1a1
-    static constexpr ImVec4 kAccentD = ImVec4(0.09f, 0.60f, 0.46f, 1.00f);
-    static constexpr ImVec4 kAccentA = ImVec4(0.15f, 1.00f, 0.76f, 1.00f);
-    c[ImGuiCol_CheckMark]           = kAccent;
-    c[ImGuiCol_SliderGrab]          = kAccentD;
-    c[ImGuiCol_SliderGrabActive]    = kAccentA;
-    c[ImGuiCol_Button]              = ImVec4(0.10f, 0.10f, 0.14f, 1.00f);
-    c[ImGuiCol_ButtonHovered]       = ImVec4(0.11f, 0.82f, 0.63f, 0.18f);
-    c[ImGuiCol_ButtonActive]        = ImVec4(0.11f, 0.82f, 0.63f, 0.30f);
-    c[ImGuiCol_Header]              = ImVec4(0.09f, 0.09f, 0.12f, 1.00f);
-    c[ImGuiCol_HeaderHovered]       = ImVec4(0.12f, 0.12f, 0.16f, 1.00f);
-    c[ImGuiCol_HeaderActive]        = ImVec4(0.14f, 0.14f, 0.18f, 1.00f);
-    c[ImGuiCol_Separator]           = ImVec4(0.12f, 0.12f, 0.16f, 1.00f);
-    c[ImGuiCol_SeparatorHovered]    = kAccentD;
-    c[ImGuiCol_SeparatorActive]     = kAccent;
-    c[ImGuiCol_Tab]                 = ImVec4(0.07f, 0.07f, 0.09f, 1.00f);
-    c[ImGuiCol_TabHovered]          = ImVec4(0.11f, 0.82f, 0.63f, 0.22f);
-    c[ImGuiCol_TabActive]           = ImVec4(0.09f, 0.55f, 0.42f, 1.00f);
-    c[ImGuiCol_TabUnfocused]        = ImVec4(0.07f, 0.07f, 0.09f, 1.00f);
-    c[ImGuiCol_TabUnfocusedActive]  = ImVec4(0.10f, 0.30f, 0.24f, 1.00f);
-    c[ImGuiCol_PlotLines]           = kAccent;
-    c[ImGuiCol_PlotLinesHovered]    = kAccentA;
-    c[ImGuiCol_PlotHistogram]       = kAccentD;
-    c[ImGuiCol_PlotHistogramHovered]= kAccent;
-    c[ImGuiCol_DragDropTarget]      = kAccent;
+    constexpr ImVec4 kA  = {0.11f,0.82f,0.63f,1.f};   // teal accent
+    constexpr ImVec4 kAD = {0.08f,0.55f,0.42f,1.f};
+    constexpr ImVec4 kAL = {0.15f,1.00f,0.76f,1.f};
+
+    auto& c = s.Colors;
+    c[ImGuiCol_WindowBg]            = {0.051f,0.051f,0.067f,1.f};
+    c[ImGuiCol_ChildBg]             = {0.067f,0.067f,0.082f,1.f};
+    c[ImGuiCol_PopupBg]             = {0.078f,0.078f,0.098f,1.f};
+    c[ImGuiCol_Text]                = {0.82f,0.82f,0.88f,1.f};
+    c[ImGuiCol_TextDisabled]        = {0.28f,0.28f,0.38f,1.f};
+    c[ImGuiCol_Border]              = {0.11f,0.11f,0.15f,1.f};
+    c[ImGuiCol_FrameBg]             = {0.09f,0.09f,0.12f,1.f};
+    c[ImGuiCol_FrameBgHovered]      = {0.11f,0.11f,0.15f,1.f};
+    c[ImGuiCol_FrameBgActive]       = {0.14f,0.14f,0.19f,1.f};
+    c[ImGuiCol_TitleBg]             = {0.04f,0.04f,0.05f,1.f};
+    c[ImGuiCol_TitleBgActive]       = {0.05f,0.05f,0.07f,1.f};
+    c[ImGuiCol_ScrollbarBg]         = {0.04f,0.04f,0.05f,1.f};
+    c[ImGuiCol_ScrollbarGrab]       = {0.18f,0.18f,0.24f,1.f};
+    c[ImGuiCol_ScrollbarGrabHovered]= {0.26f,0.26f,0.34f,1.f};
+    c[ImGuiCol_ScrollbarGrabActive] = {0.34f,0.34f,0.44f,1.f};
+    c[ImGuiCol_CheckMark]           = kA;
+    c[ImGuiCol_SliderGrab]          = kAD;
+    c[ImGuiCol_SliderGrabActive]    = kAL;
+    c[ImGuiCol_Button]              = {0.10f,0.10f,0.14f,1.f};
+    c[ImGuiCol_ButtonHovered]       = {0.11f,0.55f,0.42f,0.20f};
+    c[ImGuiCol_ButtonActive]        = {0.11f,0.82f,0.63f,0.28f};
+    c[ImGuiCol_Header]              = {0.09f,0.09f,0.12f,1.f};
+    c[ImGuiCol_HeaderHovered]       = {0.11f,0.11f,0.15f,1.f};
+    c[ImGuiCol_HeaderActive]        = {0.13f,0.13f,0.17f,1.f};
+    c[ImGuiCol_Separator]           = {0.11f,0.11f,0.15f,1.f};
+    c[ImGuiCol_Tab]                 = {0.07f,0.07f,0.09f,1.f};
+    c[ImGuiCol_TabHovered]          = {0.11f,0.55f,0.42f,0.22f};
+    c[ImGuiCol_TabActive]           = {0.07f,0.48f,0.36f,1.f};
+    c[ImGuiCol_PlotLines]           = kA;
+    c[ImGuiCol_PlotLinesHovered]    = kAL;
+    c[ImGuiCol_PlotHistogram]       = kAD;
+    c[ImGuiCol_DragDropTarget]      = kA;
 
     ImGui_ImplGlfw_InitForVulkan(window_, true);
-    ImGui_ImplVulkan_InitInfo initInfo{};
-    initInfo.ApiVersion     = VK_API_VERSION_1_3;
-    initInfo.Instance       = instance_;
-    initInfo.PhysicalDevice = physicalDevice_;
-    initInfo.Device         = device_;
-    initInfo.QueueFamily    = graphicsQueueFamily_;
-    initInfo.Queue          = graphicsQueue_;
-    initInfo.DescriptorPool = imguiPool_;
-    initInfo.MinImageCount  = 2;
-    initInfo.ImageCount     = static_cast<uint32_t>(swapchainImages_.size());
-    initInfo.PipelineInfoMain.RenderPass = renderPass_;
-    ImGui_ImplVulkan_Init(&initInfo);
+    ImGui_ImplVulkan_InitInfo ii{};
+    ii.ApiVersion = VK_API_VERSION_1_3; ii.Instance = instance_;
+    ii.PhysicalDevice = physDevice_; ii.Device = device_;
+    ii.QueueFamily = graphicsQueueFamily_; ii.Queue = graphicsQueue_;
+    ii.DescriptorPool = imguiPool_; ii.MinImageCount = 2;
+    ii.ImageCount = uint32_t(swapImages_.size());
+    ii.PipelineInfoMain.RenderPass = renderPass_;
+    ImGui_ImplVulkan_Init(&ii);
 
-    mainDeletionQueue_.push([this]() {
-        vkDestroyDescriptorPool(device_, imguiPool_, nullptr);
-    });
+    mainDQ_.push([this](){ vkDestroyDescriptorPool(device_, imguiPool_, nullptr); });
 }
 
-// ════════════════════════════════════════════════════════════════════════
-// Simulation Init
-// ════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
+// Simulation init
+// ════════════════════════════════════════════════════════════════════════════
 
 void VulkanEngine::initSimulation() {
     fluidSolver_.init(device_, allocator_, computeQueue_,
                       computeQueueFamily_, pipelineCache_, simParams_);
     renderer_.init(device_, allocator_, imguiPool_,
-                   graphicsQueueFamily_, pipelineCache_,
-                   simParams_, fluidSolver_.getMacroBuffer());
-    renderer_.createImGuiTexture(device_, imguiPool_, VK_NULL_HANDLE);
+                   pipelineCache_, simParams_, fluidSolver_.getMacroBuffer());
 }
 
-// ════════════════════════════════════════════════════════════════════════
-// Load Mesh
-// ════════════════════════════════════════════════════════════════════════
-
-void VulkanEngine::loadMeshFromFile(const std::string& filepath) {
+void VulkanEngine::loadMesh(const std::string& path) {
     vkDeviceWaitIdle(device_);
     try {
-        auto meshData    = meshLoader_.loadMesh(filepath);
-        auto obstacleMap = meshLoader_.voxelizeSurface(
-            meshData, simParams_.gridX, simParams_.gridY, simParams_.gridZ);
-        fluidSolver_.uploadObstacleMap(obstacleMap);
+        auto mesh = meshLoader_.loadMesh(path);
+        auto obs  = meshLoader_.voxelizeSurface(mesh,
+                        simParams_.gridX, simParams_.gridY, simParams_.gridZ);
+        fluidSolver_.uploadObstacleMap(obs);
         fluidSolver_.resetToEquilibrium();
-        meshLoaded_  = true;
-        totalSteps_  = 0;
-        simulatedResidual_ = 1.0f;
+        meshLoaded_   = true;
+        totalSteps_   = 0;
+        simResidual_  = 1.f;
+        Logger::log("Mesh loaded: " + path);
     } catch (const std::exception& e) {
-        std::cerr << "[Engine] Error loading mesh: " << e.what() << "\n";
+        Logger::error("Mesh load failed: " + std::string(e.what()));
     }
 }
 
-// ════════════════════════════════════════════════════════════════════════
-// Frame Drawing
-// ════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
+// Config persistence (simple key=value ini)
+// ════════════════════════════════════════════════════════════════════════════
+
+void VulkanEngine::loadConfig() {
+    std::ifstream f("vwt_config.ini");
+    if (!f.is_open()) return;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        auto eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        std::string key = line.substr(0, eq);
+        std::string val = line.substr(eq+1);
+        if (key == "tau")         simParams_.tau = std::stof(val);
+        else if (key == "inletX") simParams_.inletVelX = std::stof(val);
+        else if (key == "inletY") simParams_.inletVelY = std::stof(val);
+        else if (key == "inletZ") simParams_.inletVelZ = std::stof(val);
+        else if (key == "gridQuality") gridQuality_ = std::stof(val);
+        else if (key == "stepsPerFrame") stepsPerFrame_ = std::stoi(val);
+        else if (key == "lbmMode") simParams_.lbmMode = std::stoi(val);
+        else if (key == "sliceAxis") simParams_.sliceAxis = std::stoi(val);
+        else if (key == "visMode") simParams_.visMode = VisMode(std::stoi(val));
+        else if (key == "maxVelocity") simParams_.maxVelocity = std::stof(val);
+        else if (key == "turbulence") simParams_.turbulence = std::stof(val);
+        else if (key == "env") simParams_.currentEnvironmentIndex = std::stoi(val);
+        else if (key == "winW") windowExtent_.width  = std::stoi(val);
+        else if (key == "winH") windowExtent_.height = std::stoi(val);
+    }
+}
+
+void VulkanEngine::saveConfig() {
+    std::ofstream f("vwt_config.ini");
+    if (!f.is_open()) return;
+    f << "# Virtual Wind Tunnel config\n";
+    f << "tau=" << simParams_.tau << "\n";
+    f << "inletX=" << simParams_.inletVelX << "\n";
+    f << "inletY=" << simParams_.inletVelY << "\n";
+    f << "inletZ=" << simParams_.inletVelZ << "\n";
+    f << "gridQuality=" << gridQuality_ << "\n";
+    f << "stepsPerFrame=" << stepsPerFrame_ << "\n";
+    f << "lbmMode=" << simParams_.lbmMode << "\n";
+    f << "sliceAxis=" << simParams_.sliceAxis << "\n";
+    f << "visMode=" << int(simParams_.visMode) << "\n";
+    f << "maxVelocity=" << simParams_.maxVelocity << "\n";
+    f << "turbulence=" << simParams_.turbulence << "\n";
+    f << "env=" << simParams_.currentEnvironmentIndex << "\n";
+    f << "winW=" << windowExtent_.width << "\n";
+    f << "winH=" << windowExtent_.height << "\n";
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Frame rendering
+// ════════════════════════════════════════════════════════════════════════════
 
 void VulkanEngine::drawFrame() {
-    vkWaitForFences(device_, 1, &renderFence_, VK_TRUE, 1'000'000'000);
-    vkResetFences(device_, 1, &renderFence_);
+    auto& fr = frame();
+
+    VK_CHECK(vkWaitForFences(device_, 1, &fr.renderFence, VK_TRUE, 1'000'000'000));
+    VK_CHECK(vkResetFences(device_, 1, &fr.renderFence));
+
+    // Read back previous frame's GPU results
+    if (totalSteps_ > 0) {
+        auto t = fluidSolver_.readTimings();
+        gpuTimings_.lbmMs  = gpuTimings_.lbmMs  * 0.9f + t.lbmMs  * 0.1f;
+        gpuTimings_.aeroMs = gpuTimings_.aeroMs * 0.9f + t.aeroMs * 0.1f;
+        if (aeroDispatchThisFrame_) {
+            aeroForces_ = fluidSolver_.readAeroForces();
+            aeroDispatchThisFrame_ = false;
+        }
+    }
 
     uint32_t imageIndex;
-    VkResult acquireRes = vkAcquireNextImageKHR(device_, swapchain_, 1'000'000'000,
-                          presentSemaphore_, VK_NULL_HANDLE, &imageIndex);
-    if (acquireRes == VK_ERROR_OUT_OF_DATE_KHR) { recreateSwapchain(); return; }
+    VkResult acq = vkAcquireNextImageKHR(device_, swapchain_, 1'000'000'000,
+                       fr.presentSemaphore, VK_NULL_HANDLE, &imageIndex);
+    if (acq == VK_ERROR_OUT_OF_DATE_KHR) { recreateSwapchain(); return; }
 
-    vkResetCommandBuffer(commandBuffer_, 0);
+    VK_CHECK(vkResetCommandBuffer(fr.commandBuffer, 0));
+    buildCommandBuffer(fr.commandBuffer, imageIndex);
 
-    VkCommandBufferBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(commandBuffer_, &beginInfo);
+    VkPipelineStageFlags ws = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    VkSubmitInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.waitSemaphoreCount   = 1; si.pWaitSemaphores   = &fr.presentSemaphore;
+    si.pWaitDstStageMask    = &ws;
+    si.commandBufferCount   = 1; si.pCommandBuffers   = &fr.commandBuffer;
+    si.signalSemaphoreCount = 1; si.pSignalSemaphores = &fr.renderSemaphore;
+    VK_CHECK(vkQueueSubmit(graphicsQueue_, 1, &si, fr.renderFence));
 
-    // LBM compute steps
-    if (simulationRunning_ && meshLoaded_) {
+    VkPresentInfoKHR pres{};
+    pres.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    pres.waitSemaphoreCount = 1; pres.pWaitSemaphores = &fr.renderSemaphore;
+    pres.swapchainCount = 1; pres.pSwapchains = &swapchain_; pres.pImageIndices = &imageIndex;
+    VkResult pr = vkQueuePresentKHR(graphicsQueue_, &pres);
+    if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR) recreateSwapchain();
+
+    currentFrame_ = (currentFrame_ + 1) % FRAMES_IN_FLIGHT;
+}
+
+void VulkanEngine::buildCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
+    VkCommandBufferBeginInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VK_CHECK(vkBeginCommandBuffer(cmd, &bi));
+
+    // LBM steps
+    if (simRunning_ && meshLoaded_) {
         for (int i = 0; i < stepsPerFrame_; ++i) {
-            fluidSolver_.step(commandBuffer_, simParams_, static_cast<uint32_t>(totalSteps_));
+            fluidSolver_.step(cmd, simParams_, uint32_t(totalSteps_));
             ++totalSteps_;
+        }
+        // Dispatch aero forces every N frames
+        aeroDispatchThisFrame_ = (totalSteps_ % aeroUpdateInterval_ == 0);
+        if (aeroDispatchThisFrame_) {
+            fluidSolver_.dispatchAeroForces(cmd, simParams_);
         }
     }
 
     // Visualization slice
-    renderer_.computeVelocitySlice(commandBuffer_, simParams_,
-                                   static_cast<uint32_t>(activeVisMode_));
+    renderer_.computeSlice(cmd, simParams_);
 
     // Render pass (ImGui)
-    VkClearValue clearValue{};
-    clearValue.color = {{ 0.051f, 0.051f, 0.067f, 1.0f }};
+    VkClearValue cv{}; cv.color = {{0.051f,0.051f,0.067f,1.f}};
+    VkRenderPassBeginInfo rp{};
+    rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rp.renderPass = renderPass_; rp.framebuffer = framebuffers_[imageIndex];
+    rp.renderArea = {{0,0}, windowExtent_};
+    rp.clearValueCount = 1; rp.pClearValues = &cv;
+    vkCmdBeginRenderPass(cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
 
-    VkRenderPassBeginInfo rpInfo{};
-    rpInfo.sType           = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    rpInfo.renderPass      = renderPass_;
-    rpInfo.framebuffer     = framebuffers_[imageIndex];
-    rpInfo.renderArea      = {{ 0, 0 }, windowExtent_};
-    rpInfo.clearValueCount = 1;
-    rpInfo.pClearValues    = &clearValue;
-    vkCmdBeginRenderPass(commandBuffer_, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
+    drawImGui();
 
-    drawImGui(commandBuffer_);
-
-    vkCmdEndRenderPass(commandBuffer_);
-    vkEndCommandBuffer(commandBuffer_);
-
-    VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    VkSubmitInfo submitInfo{};
-    submitInfo.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitInfo.waitSemaphoreCount   = 1;
-    submitInfo.pWaitSemaphores      = &presentSemaphore_;
-    submitInfo.pWaitDstStageMask    = &waitStage;
-    submitInfo.commandBufferCount   = 1;
-    submitInfo.pCommandBuffers      = &commandBuffer_;
-    submitInfo.signalSemaphoreCount = 1;
-    submitInfo.pSignalSemaphores    = &renderSemaphore_;
-    vkQueueSubmit(graphicsQueue_, 1, &submitInfo, renderFence_);
-
-    VkPresentInfoKHR presentInfo{};
-    presentInfo.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-    presentInfo.waitSemaphoreCount = 1;
-    presentInfo.pWaitSemaphores    = &renderSemaphore_;
-    presentInfo.swapchainCount     = 1;
-    presentInfo.pSwapchains        = &swapchain_;
-    presentInfo.pImageIndices      = &imageIndex;
-    VkResult presentRes = vkQueuePresentKHR(graphicsQueue_, &presentInfo);
-    if (presentRes == VK_ERROR_OUT_OF_DATE_KHR || presentRes == VK_SUBOPTIMAL_KHR)
-        recreateSwapchain();
+    vkCmdEndRenderPass(cmd);
+    VK_CHECK(vkEndCommandBuffer(cmd));
 }
 
-// ════════════════════════════════════════════════════════════════════════
-// ImGui Top-level
-// ════════════════════════════════════════════════════════════════════════
-
-void VulkanEngine::drawImGui(VkCommandBuffer /*cmd*/) {
+void VulkanEngine::drawImGui() {
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    drawUI_LeftPanel();
+    drawUI_Left();
     drawUI_Viewport();
-    drawUI_RightPanel();
+    drawUI_Right();
     drawUI_StatusBar();
 
     ImGui::Render();
-    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer_);
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(),
+        frames_[currentFrame_].commandBuffer);
 }
 
-// ════════════════════════════════════════════════════════════════════════
-// UI — Left Panel  (scene setup: geometry, flow, solver, environment)
-// ════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
+// UI — Left panel
+// ════════════════════════════════════════════════════════════════════════════
 
-void VulkanEngine::drawUI_LeftPanel() {
-    const float W      = 230.0f;
-    const float H      = static_cast<float>(windowExtent_.height) - 26.0f; // leave status bar
-    const float statusH = 26.0f;
+void VulkanEngine::drawUI_Left() {
+    const float W  = 230.f;
+    const float H  = float(windowExtent_.height) - 26.f;
+    ImGui::SetNextWindowPos({0,0}); ImGui::SetNextWindowSize({W,H});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {10,8});
+    ImGui::Begin("##L", nullptr, ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoResize|
+        ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-    ImGui::SetNextWindowPos(ImVec2(0, 0));
-    ImGui::SetNextWindowSize(ImVec2(W, H));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 8));
-    ImGui::Begin("##LeftPanel", nullptr,
-        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-        ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoCollapse |
-        ImGuiWindowFlags_NoBringToFrontOnFocus);
-
-    // ── Header ──────────────────────────────────────────────────────
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.11f,0.82f,0.63f,1.f));
+    // Title
+    ImGui::PushStyleColor(ImGuiCol_Text, {0.11f,0.82f,0.63f,1.f});
     ImGui::TextUnformatted("VIRTUAL WIND TUNNEL");
     ImGui::PopStyleColor();
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.30f,0.30f,0.38f,1.f));
-    ImGui::TextUnformatted("D3Q19 Lattice Boltzmann");
+    ImGui::PushStyleColor(ImGuiCol_Text, {0.28f,0.28f,0.36f,1.f});
+    ImGui::TextUnformatted("D3Q19 Lattice Boltzmann  |  Vulkan");
     ImGui::PopStyleColor();
-    ImGui::Dummy(ImVec2(0,4));
-    ThinSep();
-    ImGui::Dummy(ImVec2(0,4));
+    ImGui::Dummy({0,4}); Sep(); ImGui::Dummy({0,4});
 
-    // ── GEOMETRY ───────────────────────────────────────────────────
+    // ── GEOMETRY ──────────────────────────────────────────────────────────
     if (SectionHeader("  Geometry")) {
-        ImGui::Dummy(ImVec2(0,2));
-
-        // Styled drop-zone / browse button
-        bool hasMesh = meshLoaded_;
-        if (hasMesh) {
-            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.04f,0.18f,0.13f,1.f));
-            ImGui::BeginChild("meshCard", ImVec2(-1, 44), true);
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.11f,0.82f,0.63f,1.f));
+        ImGui::Dummy({0,2});
+        if (meshLoaded_) {
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, {0.04f,0.16f,0.11f,1.f});
+            ImGui::BeginChild("##mc", {-1,44}, true);
+            ImGui::PushStyleColor(ImGuiCol_Text, {0.11f,0.82f,0.63f,1.f});
             ImGui::TextUnformatted("  Mesh loaded");
             ImGui::PopStyleColor();
-            // Show filename truncated
-            std::string fp = meshFilePath_;
-            auto sl = fp.rfind('/');
-            auto bs = fp.rfind('\\');
-            if (sl  != std::string::npos) fp = fp.substr(sl+1);
-            if (bs  != std::string::npos) fp = fp.substr(bs+1);
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.50f,0.50f,0.60f,1.f));
-            ImGui::Text("  %s", fp.c_str());
+            std::string fn = meshPath_;
+            auto p = fn.find_last_of("/\\");
+            if (p != std::string::npos) fn = fn.substr(p+1);
+            ImGui::PushStyleColor(ImGuiCol_Text, {0.42f,0.42f,0.54f,1.f});
+            ImGui::Text("  %s", fn.c_str());
             ImGui::PopStyleColor();
-            ImGui::EndChild();
-            ImGui::PopStyleColor();
+            ImGui::EndChild(); ImGui::PopStyleColor();
         } else {
-            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.07f,0.07f,0.10f,1.f));
-            ImGui::BeginChild("meshCardEmpty", ImVec2(-1, 44), true);
-            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 6);
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.28f,0.28f,0.36f,1.f));
-            ImGui::SetCursorPosX(28);
-            ImGui::TextUnformatted("Drop .stl / .obj here");
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, {0.07f,0.07f,0.10f,1.f});
+            ImGui::BeginChild("##me", {-1,44}, true);
+            ImGui::SetCursorPos({24, 14});
+            ImGui::PushStyleColor(ImGuiCol_Text, {0.24f,0.24f,0.32f,1.f});
+            ImGui::TextUnformatted("Drop .stl / .obj / .fbx here");
             ImGui::PopStyleColor();
-            ImGui::EndChild();
-            ImGui::PopStyleColor();
+            ImGui::EndChild(); ImGui::PopStyleColor();
         }
-
-        ImGui::Dummy(ImVec2(0,3));
-        if (ImGui::Button("  Browse Model...", ImVec2(-1, 28))) {
+        ImGui::Dummy({0,3});
+        if (ImGui::Button("  Browse Model...", {-1,28})) {
 #ifdef _WIN32
-            std::string path = openFileDialog();
-            if (!path.empty()) {
-                snprintf(meshFilePath_, sizeof(meshFilePath_), "%s", path.c_str());
-                loadMeshFromFile(meshFilePath_);
-            }
+            auto p = openFileDialog();
+            if (!p.empty()) { snprintf(meshPath_,512,"%s",p.c_str()); loadMesh(meshPath_); }
 #endif
         }
-        if (hasMesh) {
-            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.18f,0.05f,0.05f,1.f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.30f,0.08f,0.08f,1.f));
-            if (ImGui::Button("  Clear Mesh", ImVec2(-1, 24))) {
-                std::vector<uint32_t> empty(
-                    static_cast<size_t>(simParams_.gridX) *
-                    simParams_.gridY * simParams_.gridZ, 0);
+        if (meshLoaded_) {
+            ImGui::PushStyleColor(ImGuiCol_Button,        {0.18f,0.04f,0.04f,1.f});
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.28f,0.06f,0.06f,1.f});
+            if (ImGui::Button("  Clear Mesh", {-1,24})) {
+                std::vector<uint32_t> empty(size_t(simParams_.gridX)*simParams_.gridY*simParams_.gridZ, 0);
                 fluidSolver_.uploadObstacleMap(empty);
                 fluidSolver_.resetToEquilibrium();
-                meshLoaded_ = false;
-                memset(meshFilePath_, 0, sizeof(meshFilePath_));
+                meshLoaded_ = false; memset(meshPath_,0,512);
             }
             ImGui::PopStyleColor(2);
         }
-        ImGui::Dummy(ImVec2(0,2));
-
-        // Grid resolution
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f,0.45f,0.55f,1.f));
-        ImGui::Text("Grid resolution");
+        ImGui::Dummy({0,3});
+        ImGui::PushStyleColor(ImGuiCol_Text, {0.40f,0.40f,0.52f,1.f});
+        ImGui::TextUnformatted("Grid resolution scale");
         ImGui::PopStyleColor();
-        ImGui::SliderFloat("##quality", &gridQuality_, 0.5f, 2.0f, "%.1f×");
-        ImGui::Text("%u × %u × %u cells",
-            std::max(16u, static_cast<uint32_t>(baseGridX_ * gridQuality_)),
-            std::max(16u, static_cast<uint32_t>(baseGridY_ * gridQuality_)),
-            std::max(16u, static_cast<uint32_t>(baseGridZ_ * gridQuality_)));
-        if (ImGui::Button("Apply Resolution", ImVec2(-1, 24)))
-            applyResolutionPending_ = true;
-
-        ImGui::Dummy(ImVec2(0,4));
+        ImGui::SetNextItemWidth(-1);
+        ImGui::SliderFloat("##gq", &gridQuality_, 0.5f, 2.0f, "%.1f×");
+        uint32_t cx = std::max(16u,uint32_t(baseGridX_*gridQuality_));
+        uint32_t cy = std::max(16u,uint32_t(baseGridY_*gridQuality_));
+        uint32_t cz = std::max(16u,uint32_t(baseGridZ_*gridQuality_));
+        ImGui::PushStyleColor(ImGuiCol_Text, {0.30f,0.30f,0.40f,1.f});
+        ImGui::Text("%u × %u × %u  (%zuM cells)", cx, cy, cz, size_t(cx)*cy*cz/1000000+1);
+        ImGui::PopStyleColor();
+        if (ImGui::Button("Apply Resolution", {-1,24})) resizePending_ = true;
+        ImGui::Dummy({0,4});
     }
 
-    // ── FLOW CONDITIONS ────────────────────────────────────────────
+    // ── FLOW CONDITIONS ───────────────────────────────────────────────────
     if (SectionHeader("  Flow Conditions")) {
-        ImGui::Dummy(ImVec2(0,2));
-
-        const char* unitNames[] = { "m/s", "km/h", "mph", "knots" };
-        float unitScales[]      = { 594.45f, 2140.0f, 1329.0f, 1155.0f };
-        ImGui::SetNextItemWidth(-1);
-        ImGui::Combo("##units", &velocityUnit_, unitNames, 4);
-        float scale = unitScales[velocityUnit_];
-        const char* uName = unitNames[velocityUnit_];
-
-        const char* modes[] = { "Subsonic", "Supersonic" };
-        ImGui::SetNextItemWidth(-1);
-        ImGui::Combo("##mode", &speedMode_, modes, 2);
-        ImGui::Dummy(ImVec2(0,2));
-
-        float mX = (speedMode_ == 0) ? 0.0f  : -1.2f;
-        float MX = (speedMode_ == 0) ? 0.20f :  1.2f;
-
-        auto flowSlider = [&](const char* label, float* val, float lo, float hi) {
-            float disp = *val * scale;
-            char fmt[24]; snprintf(fmt, sizeof(fmt), "%%.1f %s", uName);
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f,0.45f,0.55f,1.f));
-            ImGui::TextUnformatted(label);
-            ImGui::PopStyleColor();
+        ImGui::Dummy({0,2});
+        static const char* uNames[] = {"m/s","km/h","mph","knots"};
+        static const float uScale[] = {594.45f,2140.f,1329.f,1155.f};
+        ImGui::SetNextItemWidth(-1); ImGui::Combo("##un",&velocityUnit_,uNames,4);
+        static const char* modes[] = {"Subsonic","Supersonic"};
+        ImGui::SetNextItemWidth(-1); ImGui::Combo("##sm",&speedMode_,modes,2);
+        float sc = uScale[velocityUnit_]; const char* un = uNames[velocityUnit_];
+        float mX = speedMode_?-1.2f:0.f, MX = speedMode_?1.2f:0.2f;
+        auto flowSlider = [&](const char* lbl, float* v, float lo, float hi) {
+            float d = *v*sc; char fmt[24]; snprintf(fmt,24,"%.1f %s",d,un);
+            ImGui::PushStyleColor(ImGuiCol_Text,{0.40f,0.40f,0.52f,1.f});
+            ImGui::TextUnformatted(lbl); ImGui::PopStyleColor();
             ImGui::SetNextItemWidth(-1);
-            char id[32]; snprintf(id, sizeof(id), "##%s", label);
-            if (ImGui::SliderFloat(id, &disp, lo * scale, hi * scale, fmt))
-                *val = disp / scale;
+            char id[32]; snprintf(id,32,"##%s",lbl);
+            if(ImGui::SliderFloat(id,&d,lo*sc,hi*sc,fmt)) *v=d/sc;
         };
+        ImGui::Dummy({0,2});
         flowSlider("X-Flow",  &simParams_.inletVelX, mX,    MX);
         flowSlider("Y-Flow",  &simParams_.inletVelY, -0.5f, 0.5f);
         flowSlider("Z-Flow",  &simParams_.inletVelZ, -0.5f, 0.5f);
-
-        ImGui::Dummy(ImVec2(0,2));
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f,0.45f,0.55f,1.f));
-        ImGui::TextUnformatted("Turbulence intensity");
-        ImGui::PopStyleColor();
-        ImGui::SetNextItemWidth(-1);
-        ImGui::SliderFloat("##turb", &simParams_.turbulence, 0.0f, 0.1f, "%.3f");
-
-        ImGui::Dummy(ImVec2(0,4));
+        ImGui::Dummy({0,2});
+        ImGui::PushStyleColor(ImGuiCol_Text,{0.40f,0.40f,0.52f,1.f});
+        ImGui::TextUnformatted("Turbulence intensity"); ImGui::PopStyleColor();
+        ImGui::SetNextItemWidth(-1); ImGui::SliderFloat("##tu",&simParams_.turbulence,0.f,0.1f,"%.3f");
+        ImGui::Dummy({0,4});
     }
 
-    // ── SOLVER ─────────────────────────────────────────────────────
+    // ── SOLVER ────────────────────────────────────────────────────────────
     if (SectionHeader("  Solver")) {
-        ImGui::Dummy(ImVec2(0,2));
-
-        const char* engineNames[] = { "BGK (fast)", "MRT-RLB (stable)" };
-        ImGui::SetNextItemWidth(-1);
-        ImGui::Combo("##engine", &simParams_.lbmMode, engineNames, 2);
-
-        ImGui::Dummy(ImVec2(0,2));
-        MetricRow("Relaxation τ", "%.4f", simParams_.tau);
-        ImGui::SetNextItemWidth(-1);
-        ImGui::SliderFloat("##tau", &simParams_.tau, 0.501f, 2.0f, "");
-
-        if (simParams_.lbmMode == 1) {
-            ImGui::Dummy(ImVec2(0,2));
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f,0.45f,0.55f,1.f));
-            ImGui::TextUnformatted("MRT parameters");
-            ImGui::PopStyleColor();
-            MetricRow("s_bulk", "%.2f", simParams_.s_bulk);
-            ImGui::SetNextItemWidth(-1);
-            ImGui::SliderFloat("##sbulk", &simParams_.s_bulk, 0.5f, 2.0f, "");
-            MetricRow("s_ghost", "%.2f", simParams_.s_ghost);
-            ImGui::SetNextItemWidth(-1);
-            ImGui::SliderFloat("##sghost", &simParams_.s_ghost, 0.5f, 2.0f, "");
+        ImGui::Dummy({0,2});
+        static const char* eng[] = {"BGK (fast)","MRT-RLB (stable)"};
+        ImGui::SetNextItemWidth(-1); ImGui::Combo("##en",&simParams_.lbmMode,eng,2);
+        ImGui::Dummy({0,2});
+        LabelValue("Relaxation τ","%.4f",simParams_.tau);
+        ImGui::SetNextItemWidth(-1); ImGui::SliderFloat("##ta",&simParams_.tau,0.501f,2.f,"");
+        if (simParams_.lbmMode==1) {
+            ImGui::Dummy({0,2});
+            LabelValue("s_bulk","%.2f",simParams_.s_bulk);
+            ImGui::SetNextItemWidth(-1); ImGui::SliderFloat("##sb",&simParams_.s_bulk,0.5f,2.f,"");
+            LabelValue("s_ghost","%.2f",simParams_.s_ghost);
+            ImGui::SetNextItemWidth(-1); ImGui::SliderFloat("##sg",&simParams_.s_ghost,0.5f,2.f,"");
         }
-
-        ImGui::Dummy(ImVec2(0,2));
-        MetricRow("Steps / frame", "%d", stepsPerFrame_);
-        ImGui::SetNextItemWidth(-1);
-        ImGui::SliderInt("##spf", &stepsPerFrame_, 1, 64);
-
-        ImGui::Dummy(ImVec2(0,4));
-    }
-
-    // ── ENVIRONMENT ────────────────────────────────────────────────
-    if (SectionHeader("  Environment", false)) {
-        ImGui::Dummy(ImVec2(0,2));
-        auto& profiles = EnvironmentRegistry::getProfiles();
-        std::vector<const char*> profileNames;
-        for (const auto& p : profiles) profileNames.push_back(p.name.c_str());
-        int sel = static_cast<int>(simParams_.currentEnvironmentIndex);
-        ImGui::SetNextItemWidth(-1);
-        if (ImGui::Combo("##env", &sel, profileNames.data(), (int)profileNames.size())) {
-            simParams_.currentEnvironmentIndex = static_cast<uint32_t>(sel);
-            const auto& p = profiles[sel];
-            float dt  = SimulationScaler::suggestLatticeDt(p.getKinematicViscosity(), 0.01f, 0.6f);
-            simParams_.tau = SimulationScaler::calculateTau(p.getKinematicViscosity(), 0.01f, dt);
-        }
-        const auto& p = profiles[simParams_.currentEnvironmentIndex];
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.42f,0.42f,0.52f,1.f));
-        ImGui::TextWrapped("%s", p.description.c_str());
+        ImGui::Dummy({0,2});
+        LabelValue("Steps / frame","%d",stepsPerFrame_);
+        ImGui::SetNextItemWidth(-1); ImGui::SliderInt("##sp",&stepsPerFrame_,1,64);
+        ImGui::PushStyleColor(ImGuiCol_Text,{0.28f,0.28f,0.36f,1.f});
+        ImGui::TextUnformatted("  Space=pause  R=reset  +/-=steps");
         ImGui::PopStyleColor();
-        ImGui::Dummy(ImVec2(0,4));
+        ImGui::Dummy({0,4});
     }
 
-    // ── Footer: Run / Reset ─────────────────────────────────────────
-    float footerY = H - 70.0f;
-    ImGui::SetCursorPosY(footerY > ImGui::GetCursorPosY() ? footerY : ImGui::GetCursorPosY() + 8);
-    ThinSep();
-    ImGui::Dummy(ImVec2(0,6));
+    // ── ENVIRONMENT ───────────────────────────────────────────────────────
+    if (SectionHeader("  Environment",false)) {
+        ImGui::Dummy({0,2});
+        auto& profs = EnvironmentRegistry::getProfiles();
+        std::vector<const char*> pnames;
+        for (auto& p : profs) pnames.push_back(p.name.c_str());
+        int sel = int(simParams_.currentEnvironmentIndex);
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::Combo("##env",&sel,pnames.data(),int(pnames.size()))) {
+            simParams_.currentEnvironmentIndex = uint32_t(sel);
+            auto& p = profs[sel];
+            float dt = SimulationScaler::suggestLatticeDt(p.getKinematicViscosity(),0.01f,0.6f);
+            simParams_.tau = SimulationScaler::calculateTau(p.getKinematicViscosity(),0.01f,dt);
+        }
+        ImGui::PushStyleColor(ImGuiCol_Text,{0.38f,0.38f,0.48f,1.f});
+        ImGui::TextWrapped("%s",profs[simParams_.currentEnvironmentIndex].description.c_str());
+        ImGui::PopStyleColor();
+        ImGui::Dummy({0,4});
+    }
 
-    if (simulationRunning_) {
-        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.05f,0.28f,0.20f,1.f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.07f,0.40f,0.29f,1.f));
-        if (ImGui::Button("  Pause", ImVec2((-1 - 4) * 0.5f, 30)))
-            simulationRunning_ = false;
+    // Footer: Run / Reset
+    float fy = H - 72.f;
+    if (fy > ImGui::GetCursorPosY()) ImGui::SetCursorPosY(fy);
+    Sep(); ImGui::Dummy({0,6});
+    float bw = (ImGui::GetContentRegionAvail().x - 4) * 0.5f;
+    if (simRunning_) {
+        ImGui::PushStyleColor(ImGuiCol_Button,        {0.05f,0.26f,0.19f,1.f});
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.07f,0.38f,0.28f,1.f});
+        if (ImGui::Button("  Pause", {bw,30})) simRunning_ = false;
         ImGui::PopStyleColor(2);
     } else {
-        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.07f,0.38f,0.28f,1.f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.09f,0.55f,0.40f,1.f));
-        if (ImGui::Button("  Run", ImVec2((-1 - 4) * 0.5f, 30)))
-            simulationRunning_ = true;
+        ImGui::PushStyleColor(ImGuiCol_Button,        {0.06f,0.36f,0.26f,1.f});
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, {0.09f,0.52f,0.38f,1.f});
+        if (ImGui::Button("  Run", {bw,30})) simRunning_ = true;
         ImGui::PopStyleColor(2);
     }
-    ImGui::SameLine(0, 4);
-    if (ImGui::Button("Reset", ImVec2(-1, 30))) {
+    ImGui::SameLine(0,4);
+    if (ImGui::Button("Reset", {-1,30})) {
         fluidSolver_.resetToEquilibrium();
-        totalSteps_        = 0;
-        simulatedResidual_ = 1.0f;
-        simulationRunning_ = false;
+        totalSteps_=0; simResidual_=1.f; simRunning_=false;
     }
 
-    ImGui::End();
-    ImGui::PopStyleVar();
+    ImGui::End(); ImGui::PopStyleVar();
 }
 
-// ════════════════════════════════════════════════════════════════════════
-// UI — Centre Viewport (simulation image + mode tabs + toolbar)
-// ════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
+// UI — Viewport
+// ════════════════════════════════════════════════════════════════════════════
 
 void VulkanEngine::drawUI_Viewport() {
-    const float leftW   = 230.0f;
-    const float rightW  = 240.0f;
-    const float statusH = 26.0f;
-    const float vpX     = leftW;
-    const float vpY     = 0.0f;
-    const float vpW     = static_cast<float>(windowExtent_.width)  - leftW - rightW;
-    const float vpH     = static_cast<float>(windowExtent_.height) - statusH;
+    const float lw = 230.f, rw = 240.f, sh = 26.f;
+    const float vx = lw, vy = 0.f;
+    const float vw = float(windowExtent_.width)  - lw - rw;
+    const float vh = float(windowExtent_.height) - sh;
 
-    ImGui::SetNextWindowPos(ImVec2(vpX, vpY));
-    ImGui::SetNextWindowSize(ImVec2(vpW, vpH));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0,0));
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.031f,0.031f,0.039f,1.f)); // near-black
-    ImGui::Begin("##Viewport", nullptr,
-        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-        ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoCollapse |
-        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar);
+    ImGui::SetNextWindowPos({vx,vy}); ImGui::SetNextWindowSize({vw,vh});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0,0});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, {0.031f,0.031f,0.039f,1.f});
+    ImGui::Begin("##V", nullptr, ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoResize|
+        ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoCollapse|
+        ImGuiWindowFlags_NoBringToFrontOnFocus|ImGuiWindowFlags_NoScrollbar);
 
-    // ── Vis-mode tab bar ─────────────────────────────────────────
-    ImGui::Dummy(ImVec2(0, 4));
-    ImGui::SetCursorPosX(8);
-
-    static const char* kVisModes[] = { "Velocity", "Pressure" };
-    static const int   kNModes     = 2;
-    for (int i = 0; i < kNModes; ++i) {
-        bool active = (activeVisMode_ == i);
-        if (active) {
-            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.05f,0.42f,0.32f,1.f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.07f,0.55f,0.42f,1.f));
-            ImGui::PushStyleColor(ImGuiCol_Text,          ImVec4(0.11f,0.92f,0.70f,1.f));
-        } else {
-            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.08f,0.08f,0.11f,1.f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.11f,0.11f,0.15f,1.f));
-            ImGui::PushStyleColor(ImGuiCol_Text,          ImVec4(0.38f,0.38f,0.50f,1.f));
-        }
-        if (ImGui::Button(kVisModes[i], ImVec2(80, 22))) activeVisMode_ = i;
+    // Vis-mode tabs  (1-4 keyboard shortcuts shown in tooltip)
+    ImGui::Dummy({0,4}); ImGui::SetCursorPosX(8);
+    static const char* kModes[] = {"Velocity","Pressure","Vorticity","Q-Criterion"};
+    static const char* kKeys[]  = {"[1]","[2]","[3]","[4]"};
+    for (int i = 0; i < 4; ++i) {
+        bool act = (int(simParams_.visMode) == i);
+        ImGui::PushStyleColor(ImGuiCol_Button,
+            act ? ImVec4{0.05f,0.40f,0.30f,1.f} : ImVec4{0.08f,0.08f,0.11f,1.f});
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+            act ? ImVec4{0.07f,0.55f,0.42f,1.f} : ImVec4{0.11f,0.11f,0.15f,1.f});
+        ImGui::PushStyleColor(ImGuiCol_Text,
+            act ? ImVec4{0.12f,0.92f,0.70f,1.f} : ImVec4{0.36f,0.36f,0.48f,1.f});
+        if (ImGui::Button(kModes[i], {84,22})) simParams_.visMode = VisMode(i);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s  %s", kModes[i], kKeys[i]);
         ImGui::PopStyleColor(3);
-        if (i < kNModes - 1) ImGui::SameLine(0, 3);
+        if (i < 3) ImGui::SameLine(0,3);
     }
 
-    // FPS overlay (top-right)
-    float fps = (avgFrameTime_ > 0.f) ? 1000.f / avgFrameTime_ : 0.f;
-    char fpsBuf[32];
-    snprintf(fpsBuf, sizeof(fpsBuf), "%.0f fps  %llu steps", fps, totalSteps_);
-    ImGui::SameLine(vpW - ImGui::CalcTextSize(fpsBuf).x - 10);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.18f,0.55f,0.42f,1.f));
-    ImGui::TextUnformatted(fpsBuf);
-    ImGui::PopStyleColor();
+    // FPS top-right
+    float fps = avgFrameMs_ > 0 ? 1000.f/avgFrameMs_ : 0;
+    char fb[48]; snprintf(fb,48,"%.0f fps  step %llu",fps,totalSteps_);
+    ImGui::SameLine(vw-ImGui::CalcTextSize(fb).x-10);
+    ImGui::PushStyleColor(ImGuiCol_Text,{0.16f,0.52f,0.38f,1.f});
+    ImGui::TextUnformatted(fb); ImGui::PopStyleColor();
 
-    // ── Simulation image ─────────────────────────────────────────
-    auto texId = renderer_.getImGuiTextureId();
-    if (texId) {
-        const float imgW = static_cast<float>(renderer_.getSliceWidth());
-        const float imgH = static_cast<float>(renderer_.getSliceHeight());
+    // Simulation image
+    auto tex = renderer_.getImGuiTexture();
+    if (tex) {
+        float iw = float(renderer_.sliceWidth()), ih = float(renderer_.sliceHeight());
         ImVec2 avail = ImGui::GetContentRegionAvail();
-        float aspect      = imgW / imgH;
-        float availAspect = avail.x / avail.y;
-        ImVec2 dispSize = avail;
-        if (aspect > availAspect) dispSize.y = avail.x / aspect;
-        else                      dispSize.x = avail.y * aspect;
-
+        float asp = iw/ih, aasp = avail.x/avail.y;
+        ImVec2 ds = avail;
+        if (asp > aasp) ds.y = avail.x/asp;
+        else            ds.x = avail.y*asp;
         ImVec2 cur = ImGui::GetCursorPos();
-        ImVec2 offset = ImVec2((avail.x - dispSize.x) * 0.5f, (avail.y - dispSize.y) * 0.5f);
-        ImGui::SetCursorPos(ImVec2(cur.x + offset.x, cur.y + offset.y));
-
-        float uW = 1.0f / zoomLevel_, vH = 1.0f / zoomLevel_;
-        float maxPX = (1.f - uW) * 0.5f, maxPY = (1.f - vH) * 0.5f;
-        if (maxPX < 0) maxPX = 0; if (maxPY < 0) maxPY = 0;
-        panX_ = std::clamp(panX_, -maxPX, maxPX);
-        panY_ = std::clamp(panY_, -maxPY, maxPY);
-        float uC = 0.5f - panX_, vC = 0.5f - panY_;
-        ImVec2 uv0(uC - uW*0.5f, vC - vH*0.5f);
-        ImVec2 uv1(uC + uW*0.5f, vC + vH*0.5f);
-
-        ImGui::Image(reinterpret_cast<ImTextureID>(texId), dispSize, uv0, uv1);
-
+        ImGui::SetCursorPos({cur.x+(avail.x-ds.x)*0.5f, cur.y+(avail.y-ds.y)*0.5f});
+        float uw=1.f/zoomLevel_, vh2=1.f/zoomLevel_;
+        float mpx=(1.f-uw)*0.5f, mpy=(1.f-vh2)*0.5f;
+        if(mpx<0)mpx=0; if(mpy<0)mpy=0;
+        panX_=std::clamp(panX_,-mpx,mpx); panY_=std::clamp(panY_,-mpy,mpy);
+        float uc=0.5f-panX_, vc=0.5f-panY_;
+        ImGui::Image(reinterpret_cast<ImTextureID>(tex), ds,
+            {uc-uw*0.5f,vc-vh2*0.5f}, {uc+uw*0.5f,vc+vh2*0.5f});
         if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-            ImVec2 d = ImGui::GetIO().MouseDelta;
-            panX_ += (d.x / dispSize.x) * uW;
-            panY_ += (d.y / dispSize.y) * vH;
+            auto d = ImGui::GetIO().MouseDelta;
+            panX_ += (d.x/ds.x)*uw; panY_ += (d.y/ds.y)*vh2;
         }
         if (ImGui::IsItemHovered()) {
-            float wheel = ImGui::GetIO().MouseWheel;
-            if (wheel != 0.f) {
-                zoomLevel_ = std::clamp(zoomLevel_ * (1.f + wheel * 0.1f), 0.5f, 8.0f);
-            }
+            float wh = ImGui::GetIO().MouseWheel;
+            if (wh != 0) zoomLevel_ = std::clamp(zoomLevel_*(1+wh*0.12f), 0.5f, 8.f);
         }
     } else {
-        // No-texture placeholder
-        ImVec2 avail = ImGui::GetContentRegionAvail();
-        ImGui::SetCursorPos(ImVec2(avail.x * 0.5f - 80, avail.y * 0.5f - 10));
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.18f,0.18f,0.24f,1.f));
-        ImGui::TextUnformatted("Drop a 3D model to begin");
+        ImVec2 av = ImGui::GetContentRegionAvail();
+        ImGui::SetCursorPos({av.x*0.5f-90, av.y*0.5f-8});
+        ImGui::PushStyleColor(ImGuiCol_Text,{0.16f,0.16f,0.22f,1.f});
+        ImGui::TextUnformatted("Load a 3D model to begin simulation");
         ImGui::PopStyleColor();
     }
 
-    // ── Bottom toolbar ─────────────────────────────────────────────
-    // (Slice axis/depth, brightness — inline at bottom of viewport)
-    float toolbarH = 30.0f;
-    float toolY = vpH - toolbarH;
-    ImGui::SetCursorPos(ImVec2(0, toolY));
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.04f,0.04f,0.055f,1.f));
-    ImGui::BeginChild("##vpToolbar", ImVec2(vpW, toolbarH), false);
-
+    // Bottom toolbar
+    float tbH = 30.f;
+    ImGui::SetCursorPos({0, vh-tbH});
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,{0.038f,0.038f,0.052f,1.f});
+    ImGui::BeginChild("##vpt",{vw,tbH},false);
     ImGui::SetCursorPosY(5);
     ImGui::SetCursorPosX(8);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f,0.35f,0.45f,1.f));
-    ImGui::TextUnformatted("Slice:");
-    ImGui::PopStyleColor();
-
-    ImGui::SameLine(0, 6);
-    static const char* axisNames[] = { "XY", "XZ", "YZ" };
-    for (int i = 0; i < 3; ++i) {
-        bool a = (static_cast<int>(simParams_.sliceAxis) == i);
-        if (a) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.05f,0.35f,0.26f,1.f));
-        else   ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.08f,0.08f,0.11f,1.f));
-        char lbl[8]; snprintf(lbl, sizeof(lbl), "%s##ax%d", axisNames[i], i);
-        if (ImGui::Button(lbl, ImVec2(30, 20))) simParams_.sliceAxis = static_cast<uint32_t>(i);
-        ImGui::PopStyleColor();
-        ImGui::SameLine(0, 2);
+    ImGui::PushStyleColor(ImGuiCol_Text,{0.32f,0.32f,0.42f,1.f});
+    ImGui::TextUnformatted("Slice:"); ImGui::PopStyleColor();
+    ImGui::SameLine(0,6);
+    static const char* axn[] = {"XY","XZ","YZ"};
+    for (int i=0;i<3;++i) {
+        bool a = (int(simParams_.sliceAxis)==i);
+        ImGui::PushStyleColor(ImGuiCol_Button, a?ImVec4{0.05f,0.34f,0.25f,1.f}:ImVec4{0.08f,0.08f,0.11f,1.f});
+        char lbl[8]; snprintf(lbl,8,"%s##x%d",axn[i],i);
+        if (ImGui::Button(lbl,{30,20})) simParams_.sliceAxis=uint32_t(i);
+        ImGui::PopStyleColor(); ImGui::SameLine(0,2);
     }
-
-    ImGui::SameLine(0, 10);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f,0.35f,0.45f,1.f));
-    ImGui::TextUnformatted("Depth:");
-    ImGui::PopStyleColor();
-    ImGui::SameLine(0, 4);
-    ImGui::SetNextItemWidth(90);
-    int sliceIdx = static_cast<int>(simParams_.sliceIndex);
-    int maxSlice = [&]{ if (simParams_.sliceAxis==0) return (int)simParams_.gridZ-1;
-                        if (simParams_.sliceAxis==1) return (int)simParams_.gridY-1;
-                        return (int)simParams_.gridX-1; }();
-    if (ImGui::SliderInt("##depth", &sliceIdx, 0, maxSlice))
-        simParams_.sliceIndex = static_cast<uint32_t>(sliceIdx);
-
-    ImGui::SameLine(0, 10);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f,0.35f,0.45f,1.f));
-    ImGui::TextUnformatted("Brightness:");
-    ImGui::PopStyleColor();
-    ImGui::SameLine(0, 4);
-    ImGui::SetNextItemWidth(70);
-    ImGui::SliderFloat("##bright", &simParams_.maxVelocity, 0.01f, 1.0f, "%.2f");
-
+    ImGui::SameLine(0,10);
+    ImGui::PushStyleColor(ImGuiCol_Text,{0.32f,0.32f,0.42f,1.f});
+    ImGui::TextUnformatted("Depth:"); ImGui::PopStyleColor();
+    ImGui::SameLine(0,4); ImGui::SetNextItemWidth(80);
+    int si = int(simParams_.sliceIndex);
+    int mx = int(simParams_.sliceAxis==0?simParams_.gridZ:simParams_.sliceAxis==1?simParams_.gridY:simParams_.gridX)-1;
+    if (ImGui::SliderInt("##di",&si,0,mx)) simParams_.sliceIndex=uint32_t(si);
+    ImGui::SameLine(0,10);
+    ImGui::PushStyleColor(ImGuiCol_Text,{0.32f,0.32f,0.42f,1.f});
+    ImGui::TextUnformatted("Brightness:"); ImGui::PopStyleColor();
+    ImGui::SameLine(0,4); ImGui::SetNextItemWidth(65);
+    ImGui::SliderFloat("##br",&simParams_.maxVelocity,0.01f,1.f,"%.2f");
     // Zoom indicator
-    char zoomBuf[16]; snprintf(zoomBuf, sizeof(zoomBuf), "%.1f×", zoomLevel_);
-    float zoomX = vpW - ImGui::CalcTextSize(zoomBuf).x - 8;
-    ImGui::SameLine(zoomX - ImGui::GetCursorPosX() + ImGui::GetScrollX());
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.25f,0.25f,0.35f,1.f));
-    ImGui::TextUnformatted(zoomBuf);
-    ImGui::PopStyleColor();
+    char zb[12]; snprintf(zb,12,"%.1f×",zoomLevel_);
+    float zx = vw-ImGui::CalcTextSize(zb).x-8;
+    float cx2 = ImGui::GetCursorPosX();
+    if (zx > cx2) ImGui::SameLine(zx);
+    ImGui::PushStyleColor(ImGuiCol_Text,{0.20f,0.20f,0.28f,1.f});
+    ImGui::TextUnformatted(zb); ImGui::PopStyleColor();
+    ImGui::EndChild(); ImGui::PopStyleColor();
 
-    ImGui::EndChild();
-    ImGui::PopStyleColor();
-
-    ImGui::End();
-    ImGui::PopStyleColor();
-    ImGui::PopStyleVar();
+    ImGui::End(); ImGui::PopStyleColor(); ImGui::PopStyleVar();
 }
 
-// ════════════════════════════════════════════════════════════════════════
-// UI — Right Panel  (results: forces, convergence, flow stats, perf)
-// ════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
+// UI — Right panel
+// ════════════════════════════════════════════════════════════════════════════
 
-void VulkanEngine::drawUI_RightPanel() {
-    const float W       = 240.0f;
-    const float statusH = 26.0f;
-    const float H       = static_cast<float>(windowExtent_.height) - statusH;
-    const float X       = static_cast<float>(windowExtent_.width) - W;
+void VulkanEngine::drawUI_Right() {
+    const float W  = 240.f;
+    const float H  = float(windowExtent_.height) - 26.f;
+    const float X  = float(windowExtent_.width)  - W;
+    ImGui::SetNextWindowPos({X,0}); ImGui::SetNextWindowSize({W,H});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{10,8});
+    ImGui::Begin("##R", nullptr, ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoResize|
+        ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-    ImGui::SetNextWindowPos(ImVec2(X, 0));
-    ImGui::SetNextWindowSize(ImVec2(W, H));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 8));
-    ImGui::Begin("##RightPanel", nullptr,
-        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-        ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoCollapse |
-        ImGuiWindowFlags_NoBringToFrontOnFocus);
-
-    // ── AERODYNAMIC FORCES ─────────────────────────────────────────
+    // ── AERODYNAMIC FORCES ────────────────────────────────────────────────
     if (SectionHeader("  Aerodynamic Forces")) {
-        ImGui::Dummy(ImVec2(0,2));
-        if (meshLoaded_ && totalSteps_ > 100) {
-            MetricRow("C_D", "%.4f", dragCoeff_);
-            MiniBar(std::min(std::abs(dragCoeff_) / 1.0f, 1.f),
-                    ImVec4(0.45f,0.70f,1.00f,1.f));
-            ImGui::Dummy(ImVec2(0,2));
+        ImGui::Dummy({0,2});
+        if (meshLoaded_ && totalSteps_ > 200) {
+            // Normalise raw lattice forces to physical coefficients
+            float v    = simParams_.inletVelX;
+            float qRef = 0.5f * v * v;  // lattice dynamic pressure
+            float A    = 0.05f;         // reference area (lattice units)
+            float denom = (qRef*A > 1e-8f) ? qRef*A : 1.f;
+            float CD = aeroForces_.drag / denom;
+            float CL = aeroForces_.lift / denom;
 
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.11f,0.82f,0.63f,1.f));
-            MetricRow("C_L", "%.4f", liftCoeff_);
-            ImGui::PopStyleColor();
-            MiniBar(std::min(std::abs(liftCoeff_) / 3.0f, 1.f),
-                    ImVec4(0.11f,0.82f,0.63f,1.f));
-            ImGui::Dummy(ImVec2(0,4));
-
-            float rho_air  = 1.225f;
-            float refArea  = 0.5f;
-            float v        = simParams_.inletVelX * 594.45f;
-            float qDyn     = 0.5f * rho_air * v * v;
-            MetricRow("Drag",      "%.1f N",  dragCoeff_ * qDyn * refArea);
-            MetricRow("Downforce", "%.1f N",  -liftCoeff_ * qDyn * refArea);
-            MetricRow("L/D",       "%.2f",    std::abs(liftCoeff_ / std::max(dragCoeff_, 0.001f)));
+            ImGui::PushStyleColor(ImGuiCol_Text,{0.44f,0.74f,1.f,1.f});
+            LabelValue("C_D","%.4f",CD); ImGui::PopStyleColor();
+            TinyBar(std::min(std::abs(CD)/1.5f,1.f),{0.44f,0.74f,1.f,1.f});
+            ImGui::Dummy({0,2});
+            ImGui::PushStyleColor(ImGuiCol_Text,{0.11f,0.82f,0.63f,1.f});
+            LabelValue("C_L","%.4f",CL); ImGui::PopStyleColor();
+            TinyBar(std::min(std::abs(CL)/3.f,1.f),{0.11f,0.82f,0.63f,1.f});
+            ImGui::Dummy({0,4});
+            float LD = std::abs(CL) / std::max(std::abs(CD),0.001f);
+            LabelValue("L/D ratio","%.2f",LD);
+            LabelValue("Raw drag","%.4f lat",aeroForces_.drag);
+            LabelValue("Raw lift","%.4f lat",aeroForces_.lift);
         } else {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.25f,0.25f,0.32f,1.f));
-            ImGui::TextWrapped("Run simulation with a mesh loaded to see force coefficients.");
+            ImGui::PushStyleColor(ImGuiCol_Text,{0.22f,0.22f,0.30f,1.f});
+            ImGui::TextWrapped("Load a mesh and run to see aerodynamic forces.");
             ImGui::PopStyleColor();
         }
-        ImGui::Dummy(ImVec2(0,4));
+        ImGui::Dummy({0,4});
     }
 
-    // ── CONVERGENCE ─────────────────────────────────────────────────
+    // ── CONVERGENCE ───────────────────────────────────────────────────────
     if (SectionHeader("  Convergence")) {
-        ImGui::Dummy(ImVec2(0,2));
-        // Sparkline using PlotLines
-        int histLen = kHistLen;
-        char overlayBuf[24];
-        snprintf(overlayBuf, sizeof(overlayBuf), "1e%.1f", residualHistory_[(residualHistIdx_-1+histLen)%histLen]);
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.04f,0.04f,0.06f,1.f));
-        ImGui::PlotLines("##residual", residualHistory_, histLen,
-                         residualHistIdx_ % histLen, overlayBuf,
-                         -9.f, 0.f, ImVec2(-1, 52));
+        ImGui::Dummy({0,2});
+        char ov[24]; snprintf(ov,24,"1e%.1f",residualHistory_[(fpsHistIdx_+kHist-1)%kHist]);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg,{0.04f,0.04f,0.06f,1.f});
+        ImGui::PlotLines("##res",residualHistory_,kHist,fpsHistIdx_%kHist,ov,-9.f,0.f,{-1,50});
         ImGui::PopStyleColor();
-        ImGui::Dummy(ImVec2(0,2));
-        MetricRow("Steps", "%llu", totalSteps_);
-        ImGui::Dummy(ImVec2(0,4));
+        LabelValue("Steps","%llu",totalSteps_);
+        ImGui::Dummy({0,4});
     }
 
-    // ── FLOW STATS ──────────────────────────────────────────────────
+    // ── FLOW STATS ────────────────────────────────────────────────────────
     if (SectionHeader("  Flow Statistics")) {
-        ImGui::Dummy(ImVec2(0,2));
-        float v  = simParams_.inletVelX * 594.45f; // convert lattice → m/s
-        float nu = 1.5e-5f;                         // kinematic viscosity air
-        float L  = 0.3f;                            // characteristic length 300mm
-        float Re = std::abs(v) * L / nu;
-        MetricRow("Inlet vel",  "%.2f m/s", v);
-        MetricRow("Reynolds",   "%.0f",     Re);
-        MetricRow("Max vis vel","%.3f lat", simParams_.maxVelocity);
-        MetricRow("Tau",        "%.4f",     simParams_.tau);
-        ImGui::Dummy(ImVec2(0,4));
+        ImGui::Dummy({0,2});
+        float vLat = simParams_.inletVelX;
+        float vPhys = vLat * 594.45f;  // approximate lattice→m/s
+        float nu  = 1.5e-5f;
+        float L   = 0.3f;
+        float Re  = std::abs(vPhys)*L/nu;
+        LabelValue("Inlet velocity","%.2f m/s",vPhys);
+        LabelValue("Reynolds","%.0f",Re);
+        LabelValue("Relaxation τ","%.4f",simParams_.tau);
+        LabelValue("Turbulence","%.3f",simParams_.turbulence);
+        LabelValue("Max vis vel","%.3f",simParams_.maxVelocity);
+        ImGui::Dummy({0,4});
     }
 
-    // ── GPU PERFORMANCE ─────────────────────────────────────────────
-    if (SectionHeader("  GPU Performance", false)) {
-        ImGui::Dummy(ImVec2(0,2));
-
-        float fps      = (avgFrameTime_ > 0.f) ? 1000.f / avgFrameTime_ : 0.f;
-        float simRate  = fps * static_cast<float>(stepsPerFrame_);
-        MetricRow("Frame time", "%.1f ms", avgFrameTime_);
-        MetricRow("Sim rate",   "%.0f st/s", simRate);
-        ImGui::Dummy(ImVec2(0,2));
-
-        // VRAM usage bar
-        float vramFrac = (vramBudgetBytes_ > 0)
-            ? static_cast<float>(vramUsageBytes_) / static_cast<float>(vramBudgetBytes_) : 0.f;
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f,0.45f,0.55f,1.f));
+    // ── GPU PERFORMANCE ───────────────────────────────────────────────────
+    if (SectionHeader("  GPU Performance",false)) {
+        ImGui::Dummy({0,2});
+        float fps  = avgFrameMs_>0 ? 1000.f/avgFrameMs_ : 0;
+        float rate = fps * float(stepsPerFrame_);
+        LabelValue("Frame time","%.2f ms",avgFrameMs_);
+        LabelValue("Sim rate","%.0f st/s",rate);
+        LabelValue("LBM dispatch","%.2f ms",gpuTimings_.lbmMs);
+        LabelValue("Aero dispatch","%.2f ms",gpuTimings_.aeroMs);
+        ImGui::Dummy({0,2});
+        float vf = vramBudget_>0 ? float(vramUsage_)/float(vramBudget_) : 0;
+        ImGui::PushStyleColor(ImGuiCol_Text,{0.40f,0.40f,0.52f,1.f});
         ImGui::Text("VRAM  %.1f / %.1f GB",
-            static_cast<double>(vramUsageBytes_)  / 1e9,
-            static_cast<double>(vramBudgetBytes_) / 1e9);
+            double(vramUsage_)/1e9, double(vramBudget_)/1e9);
         ImGui::PopStyleColor();
-        MiniBar(vramFrac, ImVec4(0.44f,0.60f,1.00f,1.f), 4.f);
-        ImGui::Dummy(ImVec2(0,2));
-
-        // FPS sparkline
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.04f,0.04f,0.06f,1.f));
-        ImGui::PlotLines("##fps", fpsHistory_, kHistLen,
-                         fpsHistIdx_ % kHistLen, nullptr,
-                         0.f, 200.f, ImVec2(-1, 32));
+        TinyBar(vf,{0.44f,0.60f,1.f,1.f},4.f);
+        ImGui::Dummy({0,2});
+        ImGui::PushStyleColor(ImGuiCol_FrameBg,{0.04f,0.04f,0.06f,1.f});
+        ImGui::PlotLines("##fps",fpsHistory_,kHist,fpsHistIdx_%kHist,nullptr,0,200,{-1,30});
         ImGui::PopStyleColor();
-
-        ImGui::Dummy(ImVec2(0,2));
-        MetricRow("Async compute", hasAsyncCompute_ ? "Yes" : "Shared");
-        MetricRow("GPU", gpuName_);
-        ImGui::Dummy(ImVec2(0,4));
+        ImGui::Dummy({0,2});
+        LabelValue("Async compute",hasAsyncCompute_?"yes":"shared");
+        LabelValue("Frames in flight","%d",FRAMES_IN_FLIGHT);
+        LabelValue("GPU",gpuName_);
+        ImGui::Dummy({0,4});
     }
 
-    // ── VISUALIZATION ───────────────────────────────────────────────
-    if (SectionHeader("  Colormap / View", false)) {
-        ImGui::Dummy(ImVec2(0,2));
-        // Vertical colorbar
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        ImVec2 cbPos   = ImGui::GetCursorScreenPos();
-        float  cbH     = 100.0f;
-        float  cbW     = 14.0f;
-        // Gradient approximation (inferno)
+    // ── COLORBAR ──────────────────────────────────────────────────────────
+    if (SectionHeader("  Colorbar",false)) {
+        ImGui::Dummy({0,2});
+        // Inferno gradient (matches velocity_slice.comp)
         static const ImVec4 stops[] = {
-            ImVec4(0.0f,0.0f,0.0f,1.f),
-            ImVec4(0.24f,0.06f,0.44f,1.f),
-            ImVec4(0.58f,0.11f,0.48f,1.f),
-            ImVec4(0.85f,0.26f,0.31f,1.f),
-            ImVec4(0.99f,0.56f,0.08f,1.f),
-            ImVec4(0.99f,1.00f,0.64f,1.f),
+            {0.00f,0.00f,0.01f,1.f},{0.24f,0.06f,0.44f,1.f},{0.58f,0.11f,0.48f,1.f},
+            {0.85f,0.26f,0.31f,1.f},{0.99f,0.56f,0.08f,1.f},{0.99f,1.00f,0.64f,1.f},
         };
-        int nStops = 6;
-        for (int i = 0; i < nStops - 1; ++i) {
-            float y0 = cbPos.y + cbH * (1.f - static_cast<float>(i+1)/(nStops-1));
-            float y1 = cbPos.y + cbH * (1.f - static_cast<float>(i  )/(nStops-1));
-            dl->AddRectFilledMultiColor(
-                ImVec2(cbPos.x, y0), ImVec2(cbPos.x + cbW, y1),
+        constexpr int N = 6;
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImVec2 base = ImGui::GetCursorScreenPos();
+        float cbH = 90.f, cbW = 14.f;
+        for (int i = 0; i < N-1; ++i) {
+            float y0 = base.y + cbH*(1.f - float(i+1)/(N-1));
+            float y1 = base.y + cbH*(1.f - float(i  )/(N-1));
+            dl->AddRectFilledMultiColor({base.x,y0},{base.x+cbW,y1},
                 ImGui::ColorConvertFloat4ToU32(stops[i+1]),
                 ImGui::ColorConvertFloat4ToU32(stops[i+1]),
                 ImGui::ColorConvertFloat4ToU32(stops[i]),
                 ImGui::ColorConvertFloat4ToU32(stops[i]));
         }
-        // Tick labels
         float maxV = simParams_.maxVelocity * 594.45f;
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + cbW + 4);
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX()+cbW+4);
         ImGui::BeginGroup();
-        for (int i = nStops - 1; i >= 0; --i) {
-            float val = maxV * static_cast<float>(i) / (nStops-1);
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.38f,0.38f,0.48f,1.f));
-            ImGui::Text("%.0f m/s", val);
-            ImGui::PopStyleColor();
-            if (i > 0) ImGui::Dummy(ImVec2(0, cbH/(nStops-1) - 14));
+        for (int i = N-1; i >= 0; --i) {
+            float val = maxV * float(i)/(N-1);
+            ImGui::PushStyleColor(ImGuiCol_Text,{0.35f,0.35f,0.45f,1.f});
+            ImGui::Text("%.0f m/s",val); ImGui::PopStyleColor();
+            if (i > 0) ImGui::Dummy({0, cbH/(N-1)-14.f});
         }
         ImGui::EndGroup();
-        ImGui::Dummy(ImVec2(0, 4));
+        ImGui::Dummy({0,4});
     }
 
-    ImGui::End();
-    ImGui::PopStyleVar();
+    ImGui::End(); ImGui::PopStyleVar();
 }
 
-// ════════════════════════════════════════════════════════════════════════
-// UI — Status Bar  (bottom, full width)
-// ════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
+// UI — Status bar
+// ════════════════════════════════════════════════════════════════════════════
 
 void VulkanEngine::drawUI_StatusBar() {
-    const float H = 26.0f;
-    const float W = static_cast<float>(windowExtent_.width);
-    const float Y = static_cast<float>(windowExtent_.height) - H;
-
-    ImGui::SetNextWindowPos(ImVec2(0, Y));
-    ImGui::SetNextWindowSize(ImVec2(W, H));
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.031f, 0.031f, 0.043f, 1.f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 4));
-    ImGui::Begin("##StatusBar", nullptr,
-        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-        ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoCollapse |
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoBringToFrontOnFocus);
+    const float H = 26.f;
+    const float W = float(windowExtent_.width);
+    const float Y = float(windowExtent_.height) - H;
+    ImGui::SetNextWindowPos({0,Y}); ImGui::SetNextWindowSize({W,H});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,{0.030f,0.030f,0.040f,1.f});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,{10,4});
+    ImGui::Begin("##S", nullptr, ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoResize|
+        ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoCollapse|
+        ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoBringToFrontOnFocus);
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
-
-    // Helper: coloured dot
-    auto dot = [&](ImVec4 col) {
-        ImVec2 p = ImGui::GetCursorScreenPos();
-        dl->AddCircleFilled(ImVec2(p.x+5, p.y+9), 4.f,
-                            ImGui::ColorConvertFloat4ToU32(col));
-        ImGui::Dummy(ImVec2(12, 0));
-        ImGui::SameLine(0,0);
+    auto dot = [&](ImVec4 col){
+        ImVec2 p=ImGui::GetCursorScreenPos();
+        dl->AddCircleFilled({p.x+5,p.y+9},4.f,ImGui::ColorConvertFloat4ToU32(col));
+        ImGui::Dummy({12,0}); ImGui::SameLine(0,0);
     };
 
-    // Simulation state dot
-    ImVec4 dotCol = simulationRunning_
-        ? ImVec4(0.11f,0.82f,0.63f,1.f)   // teal = running
-        : ImVec4(0.45f,0.45f,0.55f,1.f);  // grey = paused
-    dot(dotCol);
-    ImGui::PushStyleColor(ImGuiCol_Text, dotCol);
-    ImGui::TextUnformatted(simulationRunning_ ? "Running" : "Paused");
+    ImVec4 dotC = simRunning_
+        ? ImVec4{0.11f,0.82f,0.63f,1.f}
+        : ImVec4{0.38f,0.38f,0.48f,1.f};
+    dot(dotC);
+    ImGui::PushStyleColor(ImGuiCol_Text, dotC);
+    ImGui::TextUnformatted(simRunning_?"Running":"Paused");
     ImGui::PopStyleColor();
 
-    ImGui::SameLine(0, 14);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.25f,0.25f,0.33f,1.f));
-    ImGui::Text("LBM %s  %u\xC3\x97%u\xC3\x97%u",  // × as UTF-8
-        simParams_.lbmMode == 0 ? "BGK" : "MRT-RLB",
-        simParams_.gridX, simParams_.gridY, simParams_.gridZ);
-    ImGui::PopStyleColor();
+    auto item = [&](const char* txt){
+        ImGui::SameLine(0,14);
+        ImGui::PushStyleColor(ImGuiCol_Text,{0.22f,0.22f,0.30f,1.f});
+        ImGui::TextUnformatted(txt); ImGui::PopStyleColor();
+    };
 
-    ImGui::SameLine(0, 14);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.25f,0.25f,0.33f,1.f));
-    ImGui::Text("Step %llu", totalSteps_);
-    ImGui::PopStyleColor();
+    char buf[64];
+    snprintf(buf,64,"%s  %u×%u×%u",
+        simParams_.lbmMode==0?"BGK":"MRT",
+        simParams_.gridX,simParams_.gridY,simParams_.gridZ);
+    item(buf);
 
-    // GPU name + async compute indicator — right aligned
-    char gpuBuf[280];
-    snprintf(gpuBuf, sizeof(gpuBuf), "%s%s",
-             gpuName_, hasAsyncCompute_ ? "  [async ⚡]" : "");
-    float gpuW = ImGui::CalcTextSize(gpuBuf).x;
-    ImGui::SameLine(W - gpuW - 14);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.22f,0.22f,0.30f,1.f));
-    ImGui::TextUnformatted(gpuBuf);
-    ImGui::PopStyleColor();
+    snprintf(buf,64,"step %llu",totalSteps_);
+    item(buf);
 
-    ImGui::End();
-    ImGui::PopStyleVar();
-    ImGui::PopStyleColor();
+    static const char* vmNames[] = {"Velocity","Pressure","Vorticity","Q-Criterion"};
+    item(vmNames[int(simParams_.visMode)]);
+
+    // Right-align GPU name
+    char gpu[300]; snprintf(gpu,300,"%s%s",gpuName_,hasAsyncCompute_?"  [async]":"");
+    float gw = ImGui::CalcTextSize(gpu).x;
+    ImGui::SameLine(W-gw-14);
+    ImGui::PushStyleColor(ImGuiCol_Text,{0.20f,0.20f,0.28f,1.f});
+    ImGui::TextUnformatted(gpu); ImGui::PopStyleColor();
+
+    ImGui::End(); ImGui::PopStyleVar(); ImGui::PopStyleColor();
 }
 
 } // namespace vwt
