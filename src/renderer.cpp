@@ -18,7 +18,8 @@ void Renderer::init(VkDevice device, VmaAllocator allocator,
                      VkDescriptorPool imguiPool,
                      uint32_t graphicsQueueFamily,
                      const SimParams& params,
-                     VkBuffer macroBuffer)
+                     VkBuffer macroBuffer,
+                     VkPipelineCache pipelineCache)
 {
     device_      = device;
     allocator_   = allocator;
@@ -177,7 +178,7 @@ void Renderer::createSlicePipeline() {
     pipelineInfo.stage.module = shaderModule;
     pipelineInfo.stage.pName  = "main";
 
-    vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
+    vkCreateComputePipelines(device_, pipelineCache, 1, &pipelineInfo, nullptr,
                              &sliceComputePipeline_);
 
     vkDestroyShaderModule(device_, shaderModule, nullptr);

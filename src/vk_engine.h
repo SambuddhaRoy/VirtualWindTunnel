@@ -31,6 +31,7 @@ private:
     void initFramebuffers();
     void initImGui();
     void initSimulation();
+    void initPipelineCache();
     void recreateSwapchain();
     void cleanupSwapchain();
 
@@ -61,6 +62,7 @@ private:
     VkDevice                 device_          = VK_NULL_HANDLE;
     VkSurfaceKHR             surface_         = VK_NULL_HANDLE;
     VmaAllocator             allocator_       = VK_NULL_HANDLE;
+    VkPipelineCache          pipelineCache_   = VK_NULL_HANDLE;
 
     // ── Queues ──────────────────────────────────────────────────────
     VkQueue    graphicsQueue_       = VK_NULL_HANDLE;

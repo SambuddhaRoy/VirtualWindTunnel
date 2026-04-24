@@ -19,7 +19,8 @@
 #include <imgui_impl_vulkan.h>
 
 #include <iostream>
-#include <chrono>
+#include <fstream>
+#include <chrono>>
 #include <thread>
 #include <algorithm>
 
@@ -118,6 +119,9 @@ void VulkanEngine::cleanup() {
 
     vkDeviceWaitIdle(device_);
 
+    // Save pipeline cache before destroying
+    savePipelineCache();
+
     renderer_.destroy();
     fluidSolver_.destroy();
 
@@ -127,8 +131,10 @@ void VulkanEngine::cleanup() {
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
 
-    mainDeletionQueue_.flush();
-
+    mainDeletionQueue_.push([this]() {
+        vkDestroyPipelineCache(device_, pipelineCache_, nullptr);
+    });
+    
     vmaDestroyAllocator(allocator_);
     vkDestroyDevice(device_, nullptr);
     vkDestroySurfaceKHR(instance_, surface_, nullptr);
@@ -212,6 +218,17 @@ void VulkanEngine::initVulkan() {
     vkGetPhysicalDeviceProperties(physicalDevice_, &props);
     std::cout << "[Engine] GPU: " << props.deviceName << "\n";
 
+    // Detect integrated GPU and adjust default resolution
+    bool isIntegrated = (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU);
+    if (isIntegrated) {
+        std::cout << "[Engine] Integrated GPU detected, using lower default resolution\n";
+        baseGridX_ = 64;
+        baseGridY_ = 32;
+        baseGridZ_ = 32;
+        windowExtent_ = { 1280, 720 };
+        stepsPerFrame_ = 2;
+    }
+
     // Logical device
     vkb::DeviceBuilder devBuilder(physResult.value());
     auto devResult = devBuilder.build();
@@ -232,6 +249,59 @@ void VulkanEngine::initVulkan() {
     allocatorInfo.device         = device_;
     allocatorInfo.instance       = instance_;
     vmaCreateAllocator(&allocatorInfo, &allocator_);
+
+    // Pipeline cache for faster subsequent launches
+    initPipelineCache();
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Pipeline Cache (for faster startup)
+// ════════════════════════════════════════════════════════════════════════
+
+void VulkanEngine::initPipelineCache() {
+    const char* cacheFile = "pipeline_cache.bin";
+    
+    // Try to load existing cache
+    std::ifstream in(cacheFile, std::ios::ate | std::ios::binary);
+    if (in.good()) {
+        size_t size = in.tellg();
+        if (size > 0) {
+            std::vector<char> data(size);
+            in.seekg(0);
+            in.read(data.data(), size);
+            in.close();
+            
+            VkPipelineCacheCreateInfo cacheInfo{};
+            cacheInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+            cacheInfo.initialDataSize = data.size();
+            cacheInfo.pInitialData = data.data();
+            vkCreatePipelineCache(device_, &cacheInfo, nullptr, &pipelineCache_);
+            std::cout << "[Engine] Loaded pipeline cache: " << size << " bytes\n";
+            return;
+        }
+    }
+    
+    // Create new cache
+    VkPipelineCacheCreateInfo cacheInfo{};
+    cacheInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+    vkCreatePipelineCache(device_, &cacheInfo, nullptr, &pipelineCache_);
+    std::cout << "[Engine] Created new pipeline cache\n";
+}
+
+void VulkanEngine::savePipelineCache() {
+    if (pipelineCache_ == VK_NULL_HANDLE) return;
+    
+    size_t size = 0;
+    vkGetPipelineCacheData(device_, pipelineCache_, &size, nullptr);
+    if (size == 0) return;
+    
+    std::vector<char> data(size);
+    vkGetPipelineCacheData(device_, pipelineCache_, &size, data.data());
+    
+    std::ofstream out("pipeline_cache.bin", std::ios::binary);
+    out.write(data.data(), size);
+    out.close();
+    std::cout << "[Engine] Saved pipeline cache: " << size << " bytes\n";
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -477,9 +547,9 @@ void VulkanEngine::initImGui() {
 
 void VulkanEngine::initSimulation() {
     fluidSolver_.init(device_, allocator_, graphicsQueue_,
-                      graphicsQueueFamily_, simParams_);
+                      graphicsQueueFamily_, simParams_, pipelineCache_);
     renderer_.init(device_, allocator_, imguiPool_,
-                   graphicsQueueFamily_, simParams_, fluidSolver_.getMacroBuffer());
+                   graphicsQueueFamily_, simParams_, fluidSolver_.getMacroBuffer(), pipelineCache_);
     renderer_.createImGuiTexture(device_, imguiPool_, VK_NULL_HANDLE);
 }
 

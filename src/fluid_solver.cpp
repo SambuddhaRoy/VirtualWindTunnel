@@ -40,7 +40,7 @@ static AllocatedBuffer createBuffer(VmaAllocator allocator, VkDeviceSize size,
 
 void FluidSolver::init(VkDevice device, VmaAllocator allocator,
                         VkQueue computeQueue, uint32_t computeQueueFamily,
-                        const SimParams& params)
+                        const SimParams& params, VkPipelineCache pipelineCache)
 {
     device_      = device;
     allocator_   = allocator;
@@ -106,10 +106,24 @@ void FluidSolver::createBuffers() {
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         VMA_MEMORY_USAGE_GPU_ONLY);
 
-    // Staging buffer (CPU-visible) for uploads
+    // Staging buffer (CPU-visible) for uploads - optimized for frequent CPU writes
     VkDeviceSize stagingSize = std::max({fSize, obsSize, macroSize});
-    stagingBuffer_ = createBuffer(allocator_, stagingSize,
-        VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY);
+    
+    VkBufferCreateInfo stagingInfo{};
+    stagingInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    stagingInfo.size  = stagingSize;
+    stagingInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+
+    VmaAllocationCreateInfo stagingAllocInfo{};
+    stagingAllocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+    stagingAllocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+
+    stagingBuffer_.size = stagingSize;
+    VkResult res = vmaCreateBuffer(allocator_, &stagingInfo, &stagingAllocInfo,
+                                   &stagingBuffer_.buffer, &stagingBuffer_.allocation, nullptr);
+    if (res != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create staging buffer (VMA)");
+    }
 
     deletionQueue_.push([this]() {
         vmaDestroyBuffer(allocator_, fBufferA_.buffer, fBufferA_.allocation);
@@ -244,7 +258,7 @@ void FluidSolver::createPipeline() {
     pipelineInfo.stage.module = shaderModule;
     pipelineInfo.stage.pName  = "main";
 
-    vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline_);
+    vkCreateComputePipelines(device_, pipelineCache, 1, &pipelineInfo, nullptr, &pipeline_);
 
     vkDestroyShaderModule(device_, shaderModule, nullptr);
 

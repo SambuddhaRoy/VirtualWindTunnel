@@ -13,7 +13,8 @@ public:
               VkDescriptorPool imguiPool,
               uint32_t graphicsQueueFamily,
               const SimParams& params,
-              VkBuffer macroBuffer);
+              VkBuffer macroBuffer,
+              VkPipelineCache pipelineCache = VK_NULL_HANDLE);
 
     void destroy();
 
