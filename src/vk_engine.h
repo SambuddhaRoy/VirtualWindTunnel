@@ -20,7 +20,7 @@ public:
     bool isInitialized() const { return initialized_; }
 
 private:
-    // Init helpers
+    // ── Init helpers ──────────────────────────────────────────────────────
     void initWindow();
     void initVulkan();
     void initPipelineCache();
@@ -34,18 +34,27 @@ private:
     void recreateSwapchain();
     void cleanupSwapchain();
 
-    // Per-frame
+    // ── Per-frame ─────────────────────────────────────────────────────────
     void drawFrame();
     void buildCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex);
     void drawImGui();
 
-    // UI panels
+    // ── UI panels ─────────────────────────────────────────────────────────
+    void drawUI_Rail();
     void drawUI_Left();
     void drawUI_Viewport();
     void drawUI_Right();
     void drawUI_StatusBar();
 
-    // Mesh / config
+    // ── UI sub-helpers ────────────────────────────────────────────────────
+    void drawCard_Aero();
+    void drawCard_Convergence();
+    void drawCard_FlowStats();
+    void drawCard_GPU();
+    void drawViewportColorbar(ImDrawList* dl, ImVec2 vpMin, ImVec2 vpMax);
+    void drawViewportToolbar(float vpX, float vpW, float toolbarY, float toolbarH);
+
+    // ── App logic ─────────────────────────────────────────────────────────
     void loadMesh(const std::string& path);
     void loadConfig();
     void saveConfig();
@@ -55,10 +64,10 @@ private:
     static void keyCallback(GLFWwindow* w, int key, int scancode, int action, int mods);
 
     // ── Window ────────────────────────────────────────────────────────────
-    GLFWwindow* window_       = nullptr;
-    VkExtent2D  windowExtent_ = { 1600, 900 };
-    bool        initialized_  = false;
-    bool        fullscreen_   = false;
+    GLFWwindow* window_      = nullptr;
+    VkExtent2D  windowExtent_= { 1600, 900 };
+    bool        initialized_ = false;
+    bool        fullscreen_  = false;
 
     // ── Vulkan core ───────────────────────────────────────────────────────
     VkInstance               instance_       = VK_NULL_HANDLE;
@@ -77,11 +86,10 @@ private:
     bool     hasAsyncCompute_     = false;
 
     // ── Swapchain ─────────────────────────────────────────────────────────
-    VkSwapchainKHR           swapchain_     = VK_NULL_HANDLE;
-    VkFormat                 swapchainFmt_  = VK_FORMAT_UNDEFINED;
+    VkSwapchainKHR           swapchain_    = VK_NULL_HANDLE;
+    VkFormat                 swapchainFmt_ = VK_FORMAT_UNDEFINED;
     std::vector<VkImage>     swapImages_;
     std::vector<VkImageView> swapViews_;
-
     VkRenderPass               renderPass_ = VK_NULL_HANDLE;
     std::vector<VkFramebuffer> framebuffers_;
 
@@ -92,6 +100,8 @@ private:
 
     // ── ImGui ─────────────────────────────────────────────────────────────
     VkDescriptorPool imguiPool_ = VK_NULL_HANDLE;
+    ImFont* fontBody_ = nullptr;   // 15px default
+    ImFont* fontMono_ = nullptr;   // 12px monospaced
 
     // ── Application modules ───────────────────────────────────────────────
     MeshLoader  meshLoader_;
@@ -107,34 +117,45 @@ private:
     char     meshPath_[512] = "";
     bool     resizePending_ = false;
 
-    // ── Aero forces (updated every N frames) ──────────────────────────────
-    AeroForces  aeroForces_;
-    GpuTimings  gpuTimings_;
-    uint64_t    aeroUpdateInterval_ = 30;   // update every 30 frames
-    bool        aeroDispatchThisFrame_ = false;
+    // ── Aero forces ───────────────────────────────────────────────────────
+    AeroForces aeroForces_;
+    AeroForces aeroPrev_;          // previous sample for delta calc
+    float      aeroCD_     = 0.f;
+    float      aeroCL_     = 0.f;
+    float      aeroCDPrev_ = 0.f;
+    float      aeroCLPrev_ = 0.f;
+    GpuTimings gpuTimings_;
+    uint64_t   aeroUpdateInterval_    = 30;
+    bool       aeroDispatchThisFrame_ = false;
 
-    // ── Viewport interaction ──────────────────────────────────────────────
-    float zoomLevel_ = 1.0f;
-    float panX_      = 0.0f;
-    float panY_      = 0.0f;
+    // ── Viewport ─────────────────────────────────────────────────────────
+    float    zoomLevel_  = 1.0f;
+    float    panX_       = 0.0f;
+    float    panY_       = 0.0f;
+    int      activeTool_ = 0;  // 0=orbit 1=pan 2=zoom
 
     // ── Flow controls ─────────────────────────────────────────────────────
     int velocityUnit_ = 0;  // 0=m/s 1=km/h 2=mph 3=knots
     int speedMode_    = 0;  // 0=subsonic 1=supersonic
 
-    // ── Grid ──────────────────────────────────────────────────────────────
+    // ── Grid / quality ────────────────────────────────────────────────────
     float    gridQuality_ = 1.0f;
     uint32_t baseGridX_   = 128;
     uint32_t baseGridY_   = 64;
     uint32_t baseGridZ_   = 64;
 
+    // ── Navigation rail mode ──────────────────────────────────────────────
+    // 0=Simulation 1=Mesh 2=Probe 3=Compare  (future modes — currently only 0 active)
+    int railMode_ = 0;
+
     // ── Performance history ───────────────────────────────────────────────
     static constexpr int kHist = 120;
-    float fpsHistory_[kHist]       = {};
-    float residualHistory_[kHist]  = {};
-    int   fpsHistIdx_              = 0;
-    float simResidual_             = 1.0f;
-    float avgFrameMs_              = 16.6f;
+    float    fpsHistory_[kHist]      = {};
+    float    residualHistory_[kHist] = {};
+    int      fpsHistIdx_             = 0;
+    float    simResidual_            = 1.0f;
+    float    avgFrameMs_             = 16.6f;
+    float    lastResidualLog_        = 0.f;
 
     // ── VRAM ──────────────────────────────────────────────────────────────
     uint64_t vramBudget_ = 0;
